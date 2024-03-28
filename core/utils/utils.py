@@ -18,6 +18,7 @@ class InputPadder:
             self._pad = [pad_wd//2, pad_wd - pad_wd//2, 0, pad_ht]
 
     def pad(self, *inputs):
+        if sum(self._pad) == 0: return inputs
         return [F.pad(x, self._pad, mode='replicate') for x in inputs]
 
     def unpad(self,x):

@@ -1,25 +1,21 @@
-import loguru
 import torch
-import math
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import einsum
 import numpy as np
 
-from einops.layers.torch import Rearrange
 from einops import rearrange
 
-from utils.utils import coords_grid, bilinear_sampler, upflow8
+from ...utils.utils import coords_grid
 from .attention import BroadMultiHeadAttention, MultiHeadAttention, LinearPositionEmbeddingSine, ExpPositionEmbeddingSine
 from ..encoders import twins_svt_large
-from typing import Optional, Tuple
-from .twins import Size_, PosConv
-from .cnn import TwinsSelfAttentionLayer, TwinsCrossAttentionLayer, BasicEncoder
+from typing import Tuple
+from .twins import Size_
+from .cnn import BasicEncoder
 from .mlpmixer import MLPMixerLayer
 from .convnext import ConvNextLayer
-import time
 
-from timm.models.layers import Mlp, DropPath, activations, to_2tuple, trunc_normal_
+from timm.models.layers import DropPath
 
 class PatchEmbed(nn.Module):
     def __init__(self, patch_size=16, in_chans=1, embed_dim=64, pe='linear'):
