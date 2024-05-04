@@ -1,10 +1,13 @@
 import torch
 import torch.nn as nn
+from collections import OrderedDict
 
 from ..encoders import twins_svt_large
 from .encoder import MemoryEncoder
 from .decoder import MemoryDecoder
 from .cnn import BasicEncoder
+from ....core.utils.utils import InputPadder
+
 
 class FlowFormer(nn.Module):
     def __init__(self, cfg):
@@ -19,10 +22,10 @@ class FlowFormer(nn.Module):
             self.context_encoder = BasicEncoder(output_dim=256, norm_fn='instance')
 
 
-    def forward(self, image1, image2, output=None, flow_init=None):
+    def forward(self, image1, image2):
         # Following https://github.com/princeton-vl/RAFT/
-        image1 = 2 * (image1 / 255.0) - 1.0
-        image2 = 2 * (image2 / 255.0) - 1.0
+        image1 = (2 * image1) - 1.0
+        image2 = (2 * image2) - 1.0
 
         data = {}
 
@@ -33,6 +36,29 @@ class FlowFormer(nn.Module):
             
         cost_memory = self.memory_encoder(image1, image2, data, context)
 
-        flow_predictions = self.memory_decoder(cost_memory, context, data, flow_init=flow_init)
+        flow_predictions = self.memory_decoder(cost_memory, context, data, flow_init=None)
 
         return flow_predictions
+
+    @torch.no_grad()
+    @torch.inference_mode()
+    def inference(self, image1, image2):
+        image1, image2 = image1.cuda(), image2.cuda()
+        padder = InputPadder(image1.shape)
+        image1, image2 = padder.pad(image1, image2)
+
+        flow_pre, _ = self(image1, image2)
+
+        flow_pre = padder.unpad(flow_pre)
+        flow = flow_pre[0]
+        return flow, torch.empty(0)
+
+    def load_ddp_state_dict(self, ckpt: OrderedDict):
+        cvt_ckpt = OrderedDict()
+        for k in ckpt:
+            if k.startswith("module."):
+                cvt_ckpt[k[7:]] = ckpt[k]
+            else:
+                cvt_ckpt[k] = ckpt[k]
+        self.load_state_dict(cvt_ckpt)
+
