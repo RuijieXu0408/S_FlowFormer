@@ -15,7 +15,7 @@ from .cnn import BasicEncoder
 from .mlpmixer import MLPMixerLayer
 from .convnext import ConvNextLayer
 
-from timm.models.layers import DropPath
+from timm.layers import DropPath
 
 class PatchEmbed(nn.Module):
     def __init__(self, patch_size=16, in_chans=1, embed_dim=64, pe='linear'):
