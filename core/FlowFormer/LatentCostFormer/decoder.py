@@ -15,8 +15,8 @@ from .gma import Attention
 def initialize_flow(img):
     """ Flow is represented as difference between two means flow = mean1 - mean0"""
     N, C, H, W = img.shape
-    mean = coords_grid(N, H, W).to(img.device)
-    mean_init = coords_grid(N, H, W).to(img.device)
+    mean = coords_grid(N, H, W, img.device)
+    mean_init = coords_grid(N, H, W, img.device)
 
     # optical flow computed as difference: flow = mean1 - mean0
     return mean, mean_init
@@ -133,9 +133,9 @@ class ReverseCostExtractor(nn.Module):
         corr = rearrange(corr, 'b (h1 w1 heads) h2 w2 -> (b h2 w2) heads h1 w1', b=B, heads=heads, h1=H1, w1=W1, h2=H2, w2=W2)
         
         r = 4
-        dx = torch.linspace(-r, r, 2*r+1)
-        dy = torch.linspace(-r, r, 2*r+1)
-        delta = torch.stack(torch.meshgrid(dy, dx), axis=-1).to(coords0.device)
+        dx = torch.linspace(-r, r, 2*r+1, device=coords0.device)
+        dy = torch.linspace(-r, r, 2*r+1, device=coords0.device)
+        delta = torch.stack(torch.meshgrid(dy, dx), dim=-1)
         centroid = coords0.permute(0, 2, 3, 1).reshape(BH1W1, 1, 1, 2)
         delta = delta.view(1, 2*r+1, 2*r+1, 2)
         coords = centroid + delta
@@ -186,9 +186,9 @@ class MemoryDecoder(nn.Module):
         batch, h1, w1, _ = coords.shape
 
         r = 4
-        dx = torch.linspace(-r, r, 2*r+1)
-        dy = torch.linspace(-r, r, 2*r+1)
-        delta = torch.stack(torch.meshgrid(dy, dx, indexing="ij"), dim=-1).to(coords.device)
+        dx = torch.linspace(-r, r, 2*r+1, device=coords.device)
+        dy = torch.linspace(-r, r, 2*r+1, device=coords.device)
+        delta = torch.stack(torch.meshgrid(dy, dx, indexing="ij"), dim=-1)
 
         centroid = coords.reshape(batch*h1*w1, 1, 1, 2)
         delta = delta.view(1, 2*r+1, 2*r+1, 2)
@@ -208,8 +208,6 @@ class MemoryDecoder(nn.Module):
         if flow_init is not None:
             #print("[Using warm start]")
             coords1 = coords1 + flow_init
-
-        #flow = coords1
 
         flow_predictions = []
 

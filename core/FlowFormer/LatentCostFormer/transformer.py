@@ -10,11 +10,12 @@ from ....core.utils.utils import InputPadder
 
 
 class FlowFormer(nn.Module):
-    def __init__(self, cfg):
+    def __init__(self, cfg, device: str):
         super(FlowFormer, self).__init__()
+        self.device = device
         self.cfg = cfg
 
-        self.memory_encoder = MemoryEncoder(cfg)
+        self.memory_encoder = MemoryEncoder(cfg, device)
         self.memory_decoder = MemoryDecoder(cfg)
         if cfg.cnet == 'twins':
             self.context_encoder = twins_svt_large(pretrained=self.cfg.pretrain)
@@ -43,7 +44,7 @@ class FlowFormer(nn.Module):
     @torch.no_grad()
     @torch.inference_mode()
     def inference(self, image1, image2):
-        image1, image2 = image1.cuda(), image2.cuda()
+        image1, image2 = image1.to(self.device), image2.to(self.device)
         padder = InputPadder(image1.shape)
         image1, image2 = padder.pad(image1, image2)
 

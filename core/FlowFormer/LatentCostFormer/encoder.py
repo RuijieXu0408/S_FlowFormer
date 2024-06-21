@@ -18,13 +18,13 @@ from .convnext import ConvNextLayer
 from timm.layers import DropPath
 
 class PatchEmbed(nn.Module):
-    def __init__(self, patch_size=16, in_chans=1, embed_dim=64, pe='linear'):
+    def __init__(self, patch_size=16, in_chans=1, embed_dim=64, pe='linear', device='cuda'):
         super().__init__()
+        self.device = device
         self.patch_size = patch_size
         self.dim = embed_dim
         self.pe = pe
 
-        # assert patch_size == 8
         if patch_size == 8:
             self.proj = nn.Sequential(
                 nn.Conv2d(in_chans, embed_dim//4, kernel_size=6, stride=2, padding=2),
@@ -60,21 +60,24 @@ class PatchEmbed(nn.Module):
         x = self.proj(x)
         out_size = x.shape[2:] 
 
-        patch_coord = coords_grid(B, out_size[0], out_size[1]).to(x.device) * self.patch_size + self.patch_size/2 # in feature coordinate space
+        patch_coord = coords_grid(B, out_size[0], out_size[1], self.device) * self.patch_size + self.patch_size/2 # in feature coordinate space
         patch_coord = patch_coord.view(B, 2, -1).permute(0, 2, 1)
         if self.pe == 'linear':
             patch_coord_enc = LinearPositionEmbeddingSine(patch_coord, dim=self.dim)
         elif self.pe == 'exp':
             patch_coord_enc = ExpPositionEmbeddingSine(patch_coord, dim=self.dim)
+        else:
+            raise ValueError(f"Unsupported position encoding method {self.pe}")
+        
         patch_coord_enc = patch_coord_enc.permute(0, 2, 1).view(B, -1, out_size[0], out_size[1])
 
         x_pe = torch.cat([x, patch_coord_enc], dim=1)
-        x =  self.ffn_with_coord(x_pe)
+        x = self.ffn_with_coord(x_pe)
         x = self.norm(x.flatten(2).transpose(1, 2))
 
         return x, out_size
 
-from .twins import Block, CrossBlock
+from .twins import Block
 
 class GroupVerticalSelfAttentionLayer(nn.Module):
     def __init__(self, dim, cfg, num_heads=8, attn_drop=0., proj_drop=0., drop_path=0., dropout=0.):
@@ -188,7 +191,6 @@ class SelfAttentionLayer(nn.Module):
 
         return num
 
-
 class CrossAttentionLayer(nn.Module):
     def __init__(self, qk_dim, v_dim, query_token_dim, tgt_token_dim, num_heads=8, attn_drop=0., proj_drop=0., drop_path=0., dropout=0.):
         super(CrossAttentionLayer, self).__init__()
@@ -236,13 +238,13 @@ class CrossAttentionLayer(nn.Module):
 
         return x
 
-
 class CostPerceiverEncoder(nn.Module):
-    def __init__(self, cfg):
+    def __init__(self, cfg, device: str):
         super(CostPerceiverEncoder, self).__init__()
         self.cfg = cfg
+        self.device = device
         self.patch_size = cfg.patch_size
-        self.patch_embed = PatchEmbed(in_chans=self.cfg.cost_heads_num, patch_size=self.patch_size, embed_dim=cfg.cost_latent_input_dim, pe=cfg.pe)
+        self.patch_embed = PatchEmbed(in_chans=self.cfg.cost_heads_num, patch_size=self.patch_size, embed_dim=cfg.cost_latent_input_dim, pe=cfg.pe, device=device)
 
         self.depth = cfg.encoder_depth
 
@@ -304,9 +306,10 @@ class CostPerceiverEncoder(nn.Module):
         return x
 
 class MemoryEncoder(nn.Module):
-    def __init__(self, cfg):
+    def __init__(self, cfg, device: str):
         super(MemoryEncoder, self).__init__()
         self.cfg = cfg
+        self.device = device
 
         if cfg.fnet == 'twins':
             self.feat_encoder = twins_svt_large(pretrained=self.cfg.pretrain)
@@ -315,7 +318,7 @@ class MemoryEncoder(nn.Module):
         else:
             exit()
         self.channel_convertor = nn.Conv2d(cfg.encoder_latent_dim, cfg.encoder_latent_dim, 1, padding=0, bias=False)
-        self.cost_perceiver_encoder = CostPerceiverEncoder(cfg)
+        self.cost_perceiver_encoder = CostPerceiverEncoder(cfg, device)
 
     def corr(self, fmap1, fmap2):
 
