@@ -10,12 +10,12 @@ from ....core.utils.utils import InputPadder
 
 
 class FlowFormer(nn.Module):
-    def __init__(self, cfg, device: str):
+    def __init__(self, cfg, device: str, use_inference_jit=False):
         super(FlowFormer, self).__init__()
         self.device = device
         self.cfg = cfg
 
-        self.memory_encoder = MemoryEncoder(cfg, device)
+        self.memory_encoder = MemoryEncoder(cfg, device, use_inference_jit)
         self.memory_decoder = MemoryDecoder(cfg)
         if cfg.cnet == 'twins':
             self.context_encoder = twins_svt_large(pretrained=self.cfg.pretrain)

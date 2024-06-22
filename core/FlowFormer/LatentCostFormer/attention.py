@@ -1,10 +1,10 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+# import torch.nn.functional as F
 from torch import einsum
 
-from einops.layers.torch import Rearrange
-from einops import rearrange
+# from einops.layers.torch import Rearrange
+# from einops import rearrange
 
 class BroadMultiHeadAttention(nn.Module):
     def __init__(self, dim, heads):
@@ -15,8 +15,18 @@ class BroadMultiHeadAttention(nn.Module):
         self.attend = nn.Softmax(dim=-1)
 
     def attend_with_rpe(self, Q, K):
-        Q = rearrange(Q.squeeze(), 'i (heads d) -> heads i d', heads=self.heads)
-        K = rearrange(K, 'b j (heads d) -> b heads j d', heads=self.heads)
+        # Remove usage of einops for JIT compiliation and performance improvement
+        # Q = rearrange(Q.squeeze(), 'i (heads d) -> heads i d', heads=self.heads)
+        Q = Q.squeeze()
+        Q_i, Q_heads_d = Q.shape
+        Q_d = Q_heads_d // self.heads
+        Q = Q.view(Q_i, self.heads, Q_d).permute(1, 0, 2)
+        
+        # Remove usage of einops for JIT compiliation and performance improvement
+        # K = rearrange(K, 'b j (heads d) -> b heads j d', heads=self.heads)
+        K_b, K_j, K_heads_d = K.shape
+        K_d = K_heads_d // self.heads
+        K = K.view(K_b, K_j, self.heads, K_d).permute(0, 2, 1, 3)
 
         dots = einsum('hid, bhjd -> bhij', Q, K) * self.scale # (b hw) heads 1 pointnum
 
@@ -27,10 +37,15 @@ class BroadMultiHeadAttention(nn.Module):
         B, _, _ = K.shape
         _, N, _ = Q.shape
 
-        V = rearrange(V, 'b j (heads d) -> b heads j d', heads=self.heads)
+        # V = rearrange(V, 'b j (heads d) -> b heads j d', heads=self.heads)
+        V_b, V_j, V_heads_d = V.shape
+        V_d = V_heads_d // self.heads
+        V = V.view(V_b, V_j, self.heads, V_d).permute(0, 2, 1, 3)
 
         out = einsum('bhij, bhjd -> bhid', attn, V)
-        out = rearrange(out, 'b heads n d -> b n (heads d)', b=B, n=N)
+        # out = rearrange(out, 'b heads n d -> b n (heads d)', b=B, n=N)
+        out_b, out_heads, out_n, out_d = out.shape
+        out = out.permute(0, 2, 1, 3).reshape(out_b, out_n, out_heads * out_d)
 
         return out
 
@@ -43,8 +58,15 @@ class MultiHeadAttention(nn.Module):
         self.attend = nn.Softmax(dim=-1)
 
     def attend_with_rpe(self, Q, K):
-        Q = rearrange(Q, 'b i (heads d) -> b heads i d', heads=self.heads)
-        K = rearrange(K, 'b j (heads d) -> b heads j d', heads=self.heads)
+        # Q = rearrange(Q, 'b i (heads d) -> b heads i d', heads=self.heads)
+        Q_b, Q_i, Q_heads_d = Q.shape
+        Q_d = Q_heads_d // self.heads
+        Q = Q.view(Q_b, Q_i, self.heads, Q_d).permute(0, 2, 1, 3)
+        
+        # K = rearrange(K, 'b j (heads d) -> b heads j d', heads=self.heads)
+        K_b, K_j, K_heads_d = K.shape
+        K_d = K_heads_d // self.heads
+        K = K.view(K_b, K_j, self.heads, K_d).permute(0, 2, 1, 3)
 
         dots = einsum('bhid, bhjd -> bhij', Q, K) * self.scale # (b hw) heads 1 pointnum
 
@@ -54,10 +76,15 @@ class MultiHeadAttention(nn.Module):
         attn = self.attend_with_rpe(Q, K)
         B, HW, _ = Q.shape
 
-        V = rearrange(V, 'b j (heads d) -> b heads j d', heads=self.heads)
+        # V = rearrange(V, 'b j (heads d) -> b heads j d', heads=self.heads)
+        V_b, V_j, V_heads_d = V.shape
+        V_d = V_heads_d // self.heads
+        V = V.view(V_b, V_j, self.heads, V_d).permute(0, 2, 1, 3)
 
         out = einsum('bhij, bhjd -> bhid', attn, V)
-        out = rearrange(out, 'b heads hw d -> b hw (heads d)', b=B, hw=HW)
+        # out = rearrange(out, 'b heads hw d -> b hw (heads d)', b=B, hw=HW)
+        out_b, out_heads, out_hw, out_d = out.shape
+        out = out.permute(0, 2, 1, 3).reshape(out_b, out_hw, out_heads * out_d)
 
         return out
 
@@ -147,13 +174,13 @@ class MultiHeadAttentionRelative(nn.Module):
 
         return out
 
-def LinearPositionEmbeddingSine(x, dim=128, NORMALIZE_FACOR=1/200):
+def LinearPositionEmbeddingSine(x: torch.Tensor, dim: int = 128, NORMALIZE_FACOR: float =1/200):
     # 200 should be enough for a 8x downsampled image
     # assume x to be [_, _, 2]
     freq_bands = torch.linspace(0, dim//4-1, dim//4, device=x.device)
     return torch.cat([torch.sin(3.14*x[..., -2:-1]*freq_bands*NORMALIZE_FACOR), torch.cos(3.14*x[..., -2:-1]*freq_bands*NORMALIZE_FACOR), torch.sin(3.14*x[..., -1:]*freq_bands*NORMALIZE_FACOR), torch.cos(3.14*x[..., -1:]*freq_bands*NORMALIZE_FACOR)], dim=-1)
 
-def ExpPositionEmbeddingSine(x, dim=128, NORMALIZE_FACOR=1/200):
+def ExpPositionEmbeddingSine(x: torch.Tensor, dim: int = 128, NORMALIZE_FACOR: float =1/200):
     # 200 should be enough for a 8x downsampled image
     # assume x to be [_, _, 2]
     freq_bands = torch.linspace(0, dim//4-1, dim//4, device=x.device)

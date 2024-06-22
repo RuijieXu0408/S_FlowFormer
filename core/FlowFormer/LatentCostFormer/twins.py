@@ -746,8 +746,8 @@ class CrossBlock(nn.Module):
 
 class Block(nn.Module):
 
-    def __init__(self, dim, num_heads, mlp_ratio=4., drop=0., attn_drop=0., drop_path=0.,
-                 act_layer=nn.GELU, norm_layer=nn.LayerNorm, sr_ratio=1, ws=None, with_rpe=False, vert_c_dim=0, groupattention=False, cfg=None):
+    def __init__(self, dim: int, num_heads: int, mlp_ratio: float=4., drop: float=0., attn_drop: float=0., drop_path: float=0.,
+                 act_layer=nn.GELU, norm_layer=nn.LayerNorm, sr_ratio=1, ws: int=1, with_rpe=False, vert_c_dim=0, groupattention=False, cfg=None):
         super().__init__()
         self.norm1 = norm_layer(dim)
         if groupattention:
@@ -757,7 +757,7 @@ class Block(nn.Module):
             else:
                 self.attn = GroupAttnRPE(dim, num_heads, attn_drop, drop, ws, cfg)
         elif ws is None:
-            self.attn = Attention(dim, num_heads, False, None, attn_drop, drop)
+            self.attn = Attention(dim, num_heads, False, False, attn_drop, drop)
         elif ws == 1:
             if with_rpe:
                 if vert_c_dim > 0:
@@ -779,7 +779,7 @@ class Block(nn.Module):
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
-    def forward(self, x, size: Size_, context=None):
+    def forward(self, x: torch.Tensor, size: tuple[int, int], context=None):
         x = x + self.drop_path(self.attn(self.norm1(x), size, context))
         x = x + self.drop_path(self.mlp(self.norm2(x)))
         return x

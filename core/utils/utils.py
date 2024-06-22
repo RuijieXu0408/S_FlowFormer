@@ -56,21 +56,30 @@ def forward_interpolate(flow):
     flow = np.stack([flow_x, flow_y], axis=0)
     return torch.from_numpy(flow).float()
 
-def bilinear_sampler(img, coords, mode='bilinear', mask=False):
+def bilinear_sampler(img: torch.Tensor, coords: torch.Tensor) -> torch.Tensor:
     """ Wrapper for grid_sample, uses pixel coordinates """
     H, W = img.shape[-2:]
-    xgrid, ygrid = coords.split([1,1], dim=-1)
-    xgrid = 2*xgrid/(W-1) - 1
-    ygrid = 2*ygrid/(H-1) - 1
-
-    grid = torch.cat([xgrid, ygrid], dim=-1)
-    img = F.grid_sample(img, grid, align_corners=True)
-
-    if mask:
-        mask = (xgrid > -1) & (ygrid > -1) & (xgrid < 1) & (ygrid < 1)
-        return img, mask.float()
+    # NOTE: 2024-06-22 Breaking change to improve performance
+    # Original will make grid a copy of coords, while new version makes a view
+    # Original code:
+    #   xgrid, ygrid = coords.split([1,1], dim=-1)
+    #   xgrid = 2*xgrid/(W-1) - 1
+    #   ygrid = 2*ygrid/(H-1) - 1
+    #   grid = torch.cat([xgrid, ygrid], dim=-1)
+    #   img = F.grid_sample(img, grid, align_corners=True)
+    # New code seems to match performance of original codebase. 
+    
+    coords[..., 0] = 2 * coords[..., 0] / (W-1) - 1
+    coords[..., 1] = 2 * coords[..., 1] / (H-1) - 1
+    img = F.grid_sample(img, coords, align_corners=True)
 
     return img
+
+# bilinear_sampler: Callable[[torch.Tensor, torch.Tensor,], torch.Tensor] = torch.jit.script(
+#     __impl_bilinear_sampler, 
+# )   #type: ignore
+# NOTE: For debugging, use following to disable torchscript JIT
+# bilinear_sampler = __impl_bilinear_sampler
 
 def indexing(img, coords, mask=False):
     """ Wrapper for grid_sample, uses pixel coordinates """
@@ -91,10 +100,10 @@ def indexing(img, coords, mask=False):
 
     return img
 
-def coords_grid(batch, ht, wd, device):
+def coords_grid(batch: int, ht: int, wd: int, device: torch.device):
     coords = torch.meshgrid(
-        torch.arange(ht, device=device, dtype=torch.float),
-        torch.arange(wd, device=device, dtype=torch.float),
+        torch.arange(0, ht, device=device, dtype=torch.float),
+        torch.arange(0, wd, device=device, dtype=torch.float),
         indexing="ij"
     )
     coords = torch.stack((coords[1], coords[0]), dim=0)

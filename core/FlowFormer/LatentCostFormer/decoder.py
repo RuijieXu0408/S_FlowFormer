@@ -66,6 +66,8 @@ class CrossAttentionLayer(nn.Module):
             query_coord_enc = LinearPositionEmbeddingSine(query_coord, dim=self.dim)
         elif self.pe == 'exp':
             query_coord_enc = ExpPositionEmbeddingSine(query_coord, dim=self.dim)
+        else:
+            raise Exception(f"Unrecognized position embedding {self.pe}")
 
         short_cut = query
         query = self.norm1(query)
@@ -170,7 +172,7 @@ class MemoryDecoder(nn.Module):
         mask = mask.view(N, 1, 9, 8, 8, H, W)
         mask = torch.softmax(mask, dim=2)
 
-        up_flow = F.unfold(8 * flow, [3,3], padding=1)
+        up_flow = F.unfold(8 * flow, (3, 3), padding=1)
         up_flow = up_flow.view(N, 2, 9, 1, 1, H, W)
 
         up_flow = torch.sum(mask * up_flow, dim=2)
@@ -217,6 +219,8 @@ class MemoryDecoder(nn.Module):
         inp = torch.relu(inp)
         if self.cfg.gma:
             attention = self.att(inp)
+        else:
+            attention = None
 
         size = net.shape
         key, value = None, None
@@ -237,7 +241,7 @@ class MemoryDecoder(nn.Module):
 
             flow = coords1 - coords0
              
-            if self.cfg.gma:
+            if self.cfg.gma and attention is not None:
                 net, up_mask, delta_flow = self.update_block(net, inp, corr, flow, attention)
             else:
                 net, up_mask, delta_flow = self.update_block(net, inp, corr, flow)

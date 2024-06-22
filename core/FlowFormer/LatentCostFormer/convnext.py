@@ -10,7 +10,7 @@ class ConvNextLayer(nn.Module):
                 *[ConvNextBlock(dim=dim) for j in range(depth)]
             )
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor, _: tuple[int, int]):
         return self.net(x)
 
     def compute_params(self):
