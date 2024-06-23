@@ -278,7 +278,7 @@ class CostPerceiverEncoder(nn.Module):
         cost_maps = cost_volume.permute(0, 2, 3, 1, 4, 5).contiguous().view(B*H1*W1, self.cost_heads_num, H2, W2)
 
         if self.cost_scale_aug is not None:
-            scale_factor = torch.FloatTensor(B*H1*W1, self.cost_heads_num, H2, W2).uniform_(self.cost_scale_aug[0], self.cost_scale_aug[1]).cuda()
+            scale_factor = torch.FloatTensor(B*H1*W1, self.cost_heads_num, H2, W2).uniform_(self.cost_scale_aug[0], self.cost_scale_aug[1]).to(cost_maps.device)
             cost_maps = cost_maps * scale_factor
         
         x, size = self.patch_embed(cost_maps)   # B*H1*W1, size[0]*size[1], C
