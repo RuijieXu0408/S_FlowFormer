@@ -28,15 +28,15 @@ class PatchEmbed(nn.Module):
         if patch_size == 8:
             self.proj = nn.Sequential(
                 nn.Conv2d(in_chans, embed_dim//4, kernel_size=6, stride=2, padding=2),
-                nn.ReLU(),
+                nn.ReLU(inplace=True),
                 nn.Conv2d(embed_dim//4, embed_dim//2, kernel_size=6, stride=2, padding=2),
-                nn.ReLU(),
+                nn.ReLU(inplace=True),
                 nn.Conv2d(embed_dim//2, embed_dim, kernel_size=6, stride=2, padding=2),
             )
         elif patch_size == 4:
             self.proj = nn.Sequential(
                 nn.Conv2d(in_chans, embed_dim//4, kernel_size=6, stride=2, padding=2),
-                nn.ReLU(),
+                nn.ReLU(inplace=True),
                 nn.Conv2d(embed_dim//4, embed_dim, kernel_size=6, stride=2, padding=2),
             )
         else:
@@ -44,7 +44,7 @@ class PatchEmbed(nn.Module):
 
         self.ffn_with_coord = nn.Sequential(
             nn.Conv2d(embed_dim*2, embed_dim*2, kernel_size=1),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
             nn.Conv2d(embed_dim*2, embed_dim*2, kernel_size=1)
         )
         self.norm = nn.LayerNorm(embed_dim*2)
