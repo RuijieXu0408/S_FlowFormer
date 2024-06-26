@@ -350,7 +350,6 @@ class MemoryEncoder(nn.Module):
         module.cost_perceiver_encoder = torch.jit.optimize_for_inference(module.cost_perceiver_encoder)
         
         # Should not be triggered twice.
-        print("Frozen. Remove jit.freeze handle from load_state_dict hook.")
         module.freeze_handle.remove()
 
     def forward(self, img1, img2, data, context=None):
