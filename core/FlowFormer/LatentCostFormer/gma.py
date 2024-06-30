@@ -1,6 +1,6 @@
 import torch
 from torch import nn, einsum
-from einops import rearrange
+# from einops import rearrange
 
 
 class RelPosEmb(nn.Module):
@@ -22,8 +22,15 @@ class RelPosEmb(nn.Module):
         height_emb = self.rel_height(self.rel_ind[:h, :h].reshape(-1))
         width_emb = self.rel_width(self.rel_ind[:w, :w].reshape(-1))
 
-        height_emb = rearrange(height_emb, '(x u) d -> x u () d', x=h)
-        width_emb = rearrange(width_emb, '(y v) d -> y () v d', y=w)
+        h_xu, h_d = height_emb.shape
+        h_x, h_u = h, h_xu // h
+        height_emb = height_emb.view(h_x, h_u, h_d).unsqueeze(-2)
+        # height_emb = rearrange(height_emb, '(x u) d -> x u () d', x=h)
+        
+        w_yv, w_d = width_emb.shape
+        w_y, w_v = w, w_yv // w
+        width_emb = width_emb.view(w_y, w_v, w_d).unsqueeze(-3)
+        # width_emb = rearrange(width_emb, '(y v) d -> y () v d', y=w)
 
         height_score = einsum('b h x y d, x u v d -> b h x y u v', q, height_emb)
         width_score = einsum('b h x y d, y u v d -> b h x y u v', q, width_emb)
@@ -52,25 +59,28 @@ class Attention(nn.Module):
         self.pos_emb = RelPosEmb(max_pos_size, dim_head)
 
     def forward(self, fmap):
-        heads, b, c, h, w = self.heads, *fmap.shape
+        heads = self.heads
 
         q, k = self.to_qk(fmap).chunk(2, dim=1)
 
-        q, k = map(lambda t: rearrange(t, 'b (h d) x y -> b h x y d', h=heads), (q, k))
+        # q = rearrange(q, 'b (h d) x y -> b h x y d', h=heads)
+        q_b, q_hd, q_x, q_y = q.size(0), q.size(1), q.size(2), q.size(3)
+        q_h, q_d = heads, q_hd // heads
+        q = q.view(q_b, q_h, q_d, q_x, q_y).permute(0, 1, 3, 4, 2)
+        
+        # k = rearrange(k, 'b (h d) x y -> b h x y d', h=heads)
+        k_b, k_hd, k_x, k_y = k.size(0), k.size(1), k.size(2), k.size(3)
+        k_h, k_d = heads, k_hd // heads
+        k = k.view(k_b, k_h, k_d, k_x, k_y).permute(0, 1, 3, 4, 2)
+        
         q = self.scale * q
 
-        # if self.args.position_only:
-        #     sim = self.pos_emb(q)
-
-        # elif self.args.position_and_content:
-        #     sim_content = einsum('b h x y d, b h u v d -> b h x y u v', q, k)
-        #     sim_pos = self.pos_emb(q)
-        #     sim = sim_content + sim_pos
-
-        # else:
         sim = einsum('b h x y d, b h u v d -> b h x y u v', q, k)
 
-        sim = rearrange(sim, 'b h x y u v -> b h (x y) (u v)')
+        # sim = rearrange(sim, 'b h x y u v -> b h (x y) (u v)')
+        sim_b, sim_h, sim_x, sim_y, sim_u, sim_v = sim.shape
+        sim = sim.view(sim_b, sim_h, sim_x * sim_y, sim_u * sim_v)
+        
         attn = sim.softmax(dim=-1)
 
         return attn
@@ -100,12 +110,22 @@ class Aggregate(nn.Module):
             self.project = None
 
     def forward(self, attn, fmap):
-        heads, b, c, h, w = self.heads, *fmap.shape
+        heads = self.heads
+        h, w = fmap.size(2), fmap.size(3)
 
         v = self.to_v(fmap)
-        v = rearrange(v, 'b (h d) x y -> b h (x y) d', h=heads)
-        out = einsum('b h i j, b h j d -> b h i d', attn, v)
-        out = rearrange(out, 'b h (x y) d -> b (h d) x y', x=h, y=w)
+        # v = rearrange(v, 'b (h d) x y -> b h (x y) d', h=heads)
+        v_b, v_hd, v_x, v_y = v.size(0), v.size(1), v.size(2), v.size(3)
+        v_h, v_d = heads, v_hd // heads
+        v = v.view(v_b, v_h, v_d, v_x, v_y).permute(0, 1, 3, 4, 2).view(v_b, v_h, v_x * v_y, v_d)
+
+        # out = einsum('b h i j, b h j d -> b h i d', attn, v)
+        out = torch.matmul(attn, v)
+
+        # out = rearrange(out, 'b h (x y) d -> b (h d) x y', x=h, y=w)
+        out_b, out_h, out_d = out.size(0), out.size(1), out.size(3)
+        out_x, out_y = h, w
+        out = out.view(out_b, out_h, out_x, out_y, out_d).permute(0, 1, 4, 2, 3).view(out_b, out_h * out_d, out_x, out_y)
 
         if self.project is not None:
             out = self.project(out)
@@ -113,11 +133,3 @@ class Aggregate(nn.Module):
         out = fmap + self.gamma * out
 
         return out
-
-
-if __name__ == "__main__":
-    att = Attention(dim=128, heads=1)
-    fmap = torch.randn(2, 128, 40, 90)
-    out = att(fmap)
-
-    print(out.shape)

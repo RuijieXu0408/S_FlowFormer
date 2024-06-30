@@ -17,11 +17,21 @@ class FlowFormer(nn.Module):
 
         self.memory_encoder = MemoryEncoder(cfg, device, use_inference_jit)
         self.memory_decoder = MemoryDecoder(cfg)
+        if use_inference_jit:
+            self.freeze_handle  = self.memory_decoder.register_load_state_dict_post_hook(self.__freeze_decoder)
+
         if cfg.cnet == 'twins':
             self.context_encoder = twins_svt_large(pretrained=self.cfg.pretrain)
         elif cfg.cnet == 'basicencoder':
             self.context_encoder = BasicEncoder(output_dim=256, norm_fn='instance')
 
+    @staticmethod
+    def __freeze_decoder(module, _):
+        if not module.use_jit_inference: return
+        module.memory_decoder = torch.jit.optimize_for_inference(
+            torch.jit.script(module.memory_decoder)
+        )
+        module.freeze_handle.remove()   # Should not be triggered twice.
 
     def forward(self, image1, image2):
         # Following https://github.com/princeton-vl/RAFT/
@@ -34,10 +44,10 @@ class FlowFormer(nn.Module):
             context = self.context_encoder(torch.cat([image1, image2], dim=1))
         else:
             context = self.context_encoder(image1)
-            
+
         cost_memory = self.memory_encoder(image1, image2, data, context)
 
-        flow_predictions = self.memory_decoder(cost_memory, context, data, flow_init=None)
+        flow_predictions = self.memory_decoder(cost_memory, context, data["cost_maps"], self.cfg.query_latent_dim, flow_init=None)
 
         return flow_predictions
 
@@ -50,7 +60,7 @@ class FlowFormer(nn.Module):
 
         flow_pre, _ = self(image1, image2)
 
-        flow_pre = padder.unpad(flow_pre)
+        flow_pre = padder.unpad(flow_pre[0])
         flow = flow_pre[0]
         return flow, torch.empty(0)
 
