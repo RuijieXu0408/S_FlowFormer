@@ -60,7 +60,9 @@ class PatchEmbed(nn.Module):
         x = self.proj(x)
         out_size = x.shape[2:] 
 
-        patch_coord = coords_grid(B, out_size[0], out_size[1], torch.device(self.device)) * self.patch_size + self.patch_size/2 # in feature coordinate space
+        patch_coord = coords_grid(
+            B, out_size[0], out_size[1], torch.device(self.device), x.dtype
+        ) * self.patch_size + (self.patch_size / 2) # in feature coordinate space
         patch_coord = patch_coord.view(B, 2, -1).permute(0, 2, 1)
         if self.pe == 'linear':
             patch_coord_enc = LinearPositionEmbeddingSine(patch_coord, dim=self.dim)
@@ -273,12 +275,16 @@ class CostPerceiverEncoder(nn.Module):
 
 
 
-    def forward(self, cost_volume, context=None) -> tuple[torch.Tensor, torch.Tensor, tuple[int, int]]:
+    def forward(self, cost_volume: torch.Tensor, context=None) -> tuple[torch.Tensor, torch.Tensor, tuple[int, int]]:
         B, heads, H1, W1, H2, W2 = cost_volume.shape
         cost_maps = cost_volume.permute(0, 2, 3, 1, 4, 5).contiguous().view(B*H1*W1, self.cost_heads_num, H2, W2)
 
         if self.cost_scale_aug is not None:
-            scale_factor = torch.FloatTensor(B*H1*W1, self.cost_heads_num, H2, W2).uniform_(self.cost_scale_aug[0], self.cost_scale_aug[1]).to(cost_maps.device)
+            # scale_factor = torch.FloatTensor(B*H1*W1, self.cost_heads_num, H2, W2).uniform_(self.cost_scale_aug[0], self.cost_scale_aug[1]).to(cost_maps.device)
+            scale_factor = self.cost_scale_aug[0] + torch.rand(
+                (B * H1 * W1, self.cost_heads_num, H2, W2),
+                device=cost_maps.device, dtype=cost_maps.dtype
+            ) * (self.cost_scale_aug[1] - self.cost_scale_aug[0])
             cost_maps = cost_maps * scale_factor
         
         x, size = self.patch_embed(cost_maps)   # B*H1*W1, size[0]*size[1], C

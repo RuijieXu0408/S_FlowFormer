@@ -100,10 +100,10 @@ def indexing(img, coords, mask=False):
 
     return img
 
-def coords_grid(batch: int, ht: int, wd: int, device: torch.device):
+def coords_grid(batch: int, ht: int, wd: int, device: torch.device, dtype: torch.dtype):
     coords = torch.meshgrid(
-        torch.arange(0, ht, device=device, dtype=torch.float),
-        torch.arange(0, wd, device=device, dtype=torch.float),
+        torch.arange(0, ht, device=device, dtype=dtype),
+        torch.arange(0, wd, device=device, dtype=dtype),
         indexing="ij"
     )
     coords = torch.stack((coords[1], coords[0]), dim=0)

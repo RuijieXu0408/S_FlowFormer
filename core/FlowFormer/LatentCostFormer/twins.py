@@ -86,7 +86,7 @@ class GroupAttnRPEContext(nn.Module):
         self.proj_drop = nn.Dropout(proj_drop)
         self.ws = ws
 
-    def forward(self, x, size: Size_, context=None):
+    def forward(self, x, size: Size_):
         B, N, C = x.shape
         C_qk = C+self.vert_c_dim
         H, W = size
@@ -109,7 +109,7 @@ class GroupAttnRPEContext(nn.Module):
         _h, _w = Hp // self.ws, Wp // self.ws
         padded_N = Hp*Wp
 
-        coords = coords_grid(B, Hp, Wp, x.device)
+        coords = coords_grid(B, Hp, Wp, x.device, x.dtype)
         coords = coords.view(B, 2, -1).permute(0, 2, 1)
         coords_enc = LinearPositionEmbeddingSine(coords, dim=C_qk)
         coords_enc = coords_enc.reshape(B, Hp, Wp, C_qk)
@@ -185,7 +185,7 @@ class GroupAttnRPE(nn.Module):
         _h, _w = Hp // self.ws, Wp // self.ws
         padded_N = Hp*Wp
 
-        coords = coords_grid(B, Hp, Wp, x.device)
+        coords = coords_grid(B, Hp, Wp, x.device, x.dtype)
         coords = coords.view(B, 2, -1).permute(0, 2, 1)
         coords_enc = LinearPositionEmbeddingSine(coords, dim=C)
         coords_enc = coords_enc.reshape(B, Hp, Wp, C)
@@ -247,7 +247,7 @@ class LocallyGroupedAttnRPEContext(nn.Module):
         self.proj_drop = nn.Dropout(proj_drop)
         self.ws = ws
 
-    def forward(self, x, size: Size_, context=None):
+    def forward(self, x, size: Size_, context):
         # There are two implementations for this function, zero padding or mask. We don't observe obvious difference for
         # both. You can choose any one, we recommend forward_padding because it's neat. However,
         # the masking implementation is more reasonable and accurate.
@@ -277,7 +277,7 @@ class LocallyGroupedAttnRPEContext(nn.Module):
         v = self.v(x).reshape(
             B, _h * _w, self.ws * self.ws, 1, self.num_heads, C // self.num_heads).permute(3, 0, 1, 4, 2, 5)[0]
 
-        coords = coords_grid(B, self.ws, self.ws, x.device)
+        coords = coords_grid(B, self.ws, self.ws, x.device, x.dtype)
         coords = coords.view(B, 2, -1).permute(0, 2, 1)
         coords_enc = LinearPositionEmbeddingSine(coords, dim=C_qk).view(B, self.ws, self.ws, C_qk)   
         # coords_enc:   B, ws, ws, C
@@ -352,7 +352,7 @@ class GlobalSubSampleAttnRPEContext(nn.Module):
         x = x.view(B, -1, C)
         x_qk = x_qk.view(B, -1, C_qk)
 
-        coords = coords_grid(B, *padded_size, x.device)
+        coords = coords_grid(B, *padded_size, x.device, x.dtype)
         coords = coords.view(B, 2, -1).permute(0, 2, 1)
         coords_enc = LinearPositionEmbeddingSine(coords, dim=C_qk)   
         # coords_enc:   B, Hp*Wp, C
@@ -367,7 +367,7 @@ class GlobalSubSampleAttnRPEContext(nn.Module):
             x = self.norm(x)
             x_qk = self.norm(x_qk)
 
-        coords = coords_grid(B, padded_size[0] // self.sr_ratio, padded_size[1] // self.sr_ratio, x.device)
+        coords = coords_grid(B, padded_size[0] // self.sr_ratio, padded_size[1] // self.sr_ratio, x.device, x.dtype)
         coords = coords.view(B, 2, -1).permute(0, 2, 1) * self.sr_ratio
         # align the coordinate of local and global
         coords_enc = LinearPositionEmbeddingSine(coords, dim=C)
@@ -426,7 +426,7 @@ class LocallyGroupedAttnRPE(nn.Module):
         v = self.v(x).reshape(
             B, _h * _w, self.ws * self.ws, 1, self.num_heads, C // self.num_heads).permute(3, 0, 1, 4, 2, 5)[0]
 
-        coords = coords_grid(B, self.ws, self.ws, x.device)
+        coords = coords_grid(B, self.ws, self.ws, x.device, x.dtype)
         coords = coords.view(B, 2, -1).permute(0, 2, 1)
         coords_enc = LinearPositionEmbeddingSine(coords, dim=C).view(B, self.ws, self.ws, C)   
         # coords_enc:   B, ws, ws, C
@@ -489,7 +489,7 @@ class GlobalSubSampleAttnRPE(nn.Module):
         padded_N = Hp*Wp
         x = x.view(B, -1, C)
 
-        coords = coords_grid(B, *padded_size, x.device) 
+        coords = coords_grid(B, *padded_size, x.device, x.dtype) 
         coords = coords.view(B, 2, -1).permute(0, 2, 1)
         coords_enc = LinearPositionEmbeddingSine(coords, dim=C)   
         # coords_enc:   B, Hp*Wp, C
@@ -501,7 +501,7 @@ class GlobalSubSampleAttnRPE(nn.Module):
             x = self.sr(x).reshape(B, C, -1).permute(0, 2, 1)
             x = self.norm(x)
 
-        coords = coords_grid(B, padded_size[0] // self.sr_ratio, padded_size[1] // self.sr_ratio, x.device) 
+        coords = coords_grid(B, padded_size[0] // self.sr_ratio, padded_size[1] // self.sr_ratio, x.device, x.dtype) 
         coords = coords.view(B, 2, -1).permute(0, 2, 1) * self.sr_ratio
         # align the coordinate of local and global
         coords_enc = LinearPositionEmbeddingSine(coords, dim=C)
@@ -551,7 +551,7 @@ class CrossGlobalSubSampleAttnRPE(nn.Module):
 
     def forward(self, x, tgt, size: Size_):
         B, N, C = x.shape
-        coords = coords_grid(B, *size, device=x.device) 
+        coords = coords_grid(B, *size, device=x.device, dtype=x.dtype) 
         coords = coords.view(B, 2, -1).permute(0, 2, 1)
         coords_enc = LinearPositionEmbeddingSine(coords, dim=C)   
         # coords_enc:   B, H*W, C
@@ -562,7 +562,7 @@ class CrossGlobalSubSampleAttnRPE(nn.Module):
             tgt = tgt.permute(0, 2, 1).reshape(B, C, *size)
             tgt = self.sr(tgt).reshape(B, C, -1).permute(0, 2, 1)
             tgt = self.norm(tgt)
-        coords = coords_grid(B, size[0] // self.sr_ratio, size[1] // self.sr_ratio, device=x.device)
+        coords = coords_grid(B, size[0] // self.sr_ratio, size[1] // self.sr_ratio, device=x.device, dtype=x.dtype)
         coords = coords.view(B, 2, -1).permute(0, 2, 1) * self.sr_ratio
         # align the coordinate of local and global
         coords_enc = LinearPositionEmbeddingSine(coords, dim=C)

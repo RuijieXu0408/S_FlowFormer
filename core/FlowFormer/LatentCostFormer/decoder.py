@@ -15,8 +15,8 @@ from .gma import Attention
 def initialize_flow(img):
     """ Flow is represented as difference between two means flow = mean1 - mean0"""
     N, H, W = img.size(0), img.size(2), img.size(3)     # img = (N, C, H, W)
-    mean = coords_grid(N, H, W, img.device)
-    mean_init = coords_grid(N, H, W, img.device)
+    mean      = coords_grid(N, H, W, img.device, img.dtype)
+    mean_init = coords_grid(N, H, W, img.device, img.dtype)
 
     # optical flow computed as difference: flow = mean1 - mean0
     return mean, mean_init
@@ -205,8 +205,8 @@ class MemoryDecoder(nn.Module):
         batch, h1, w1, _ = coords.shape
 
         r = 4
-        dx = torch.linspace(-r, r, 2*r+1, device=coords.device)
-        dy = torch.linspace(-r, r, 2*r+1, device=coords.device)
+        dx = torch.linspace(-r, r, 2*r+1, device=coords.device, dtype=coords.dtype)
+        dy = torch.linspace(-r, r, 2*r+1, device=coords.device, dtype=coords.dtype)
         delta = torch.stack(torch.meshgrid(dy, dx, indexing="ij"), dim=-1)
 
         centroid = coords.reshape(batch*h1*w1, 1, 1, 2)

@@ -134,10 +134,10 @@ class MultiHeadAttention(nn.Module):
 def LinearPositionEmbeddingSine(x: torch.Tensor, dim: int = 128, NORMALIZE_FACOR: float =1/200):
     # 200 should be enough for a 8x downsampled image
     # assume x to be [_, _, 2]
-    freq_bands = torch.linspace(0, dim//4-1, dim//4, device=x.device)
+    freq_bands = torch.linspace(0, dim//4-1, dim//4, device=x.device, dtype=x.dtype)
     
     width: int = freq_bands.size(0)
-    result = torch.empty((x.size(0), x.size(1), width * 4), device=x.device)
+    result = torch.empty((x.size(0), x.size(1), width * 4), device=x.device, dtype=x.dtype)
     result[..., width * 0 : width * 1] = x[..., -2:-1] * freq_bands
     result[..., width * 1 : width * 2] = x[..., -2:-1] * freq_bands
     result[..., width * 2 : width * 3] = x[..., -1:]   * freq_bands
@@ -154,5 +154,5 @@ def LinearPositionEmbeddingSine(x: torch.Tensor, dim: int = 128, NORMALIZE_FACOR
 def ExpPositionEmbeddingSine(x: torch.Tensor, dim: int = 128, NORMALIZE_FACOR: float =1/200):
     # 200 should be enough for a 8x downsampled image
     # assume x to be [_, _, 2]
-    freq_bands = torch.linspace(0, dim//4-1, dim//4, device=x.device)
+    freq_bands = torch.linspace(0, dim//4-1, dim//4, device=x.device, dtype=x.dtype)
     return torch.cat([torch.sin(x[..., -2:-1]*(NORMALIZE_FACOR * 2 ** freq_bands)), torch.cos(x[..., -2:-1]*(NORMALIZE_FACOR * 2 ** freq_bands)), torch.sin(x[..., -1:]*(NORMALIZE_FACOR * 2 ** freq_bands)), torch.cos(x[..., -1:]*(NORMALIZE_FACOR * 2 ** freq_bands))], dim=-1)
