@@ -15,29 +15,18 @@ from .attention import BroadMultiHeadAttention, MultiHeadAttention, LinearPositi
 
 
 class PatchEmbed(nn.Module):
-    def __init__(self, patch_size=16, in_chans=1, embed_dim=64, pe='linear', device='cuda'):
+    def __init__(self, in_chans=1, embed_dim=64, device='cuda'):
         super().__init__()
-        self.device = device
-        self.patch_size = patch_size
-        self.dim = embed_dim
-        self.pe = pe
-
-        if patch_size == 8:
-            self.proj = nn.Sequential(
-                nn.Conv2d(in_chans, embed_dim//4, kernel_size=6, stride=2, padding=2),
-                nn.ReLU(inplace=True),
-                nn.Conv2d(embed_dim//4, embed_dim//2, kernel_size=6, stride=2, padding=2),
-                nn.ReLU(inplace=True),
-                nn.Conv2d(embed_dim//2, embed_dim, kernel_size=6, stride=2, padding=2),
-            )
-        elif patch_size == 4:
-            self.proj = nn.Sequential(
-                nn.Conv2d(in_chans, embed_dim//4, kernel_size=6, stride=2, padding=2),
-                nn.ReLU(inplace=True),
-                nn.Conv2d(embed_dim//4, embed_dim, kernel_size=6, stride=2, padding=2),
-            )
-        else:
-            print(f"patch size = {patch_size} is unacceptable.")
+        self.device     = device
+        self.patch_size = 8
+        self.dim        = embed_dim
+        self.proj       = nn.Sequential(
+            nn.Conv2d(in_chans, embed_dim//4, kernel_size=6, stride=2, padding=2),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(embed_dim//4, embed_dim//2, kernel_size=6, stride=2, padding=2),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(embed_dim//2, embed_dim, kernel_size=6, stride=2, padding=2),
+        )
 
         self.ffn_with_coord = nn.Sequential(
             nn.Conv2d(embed_dim*2, embed_dim*2, kernel_size=1),
@@ -70,7 +59,6 @@ class PatchEmbed(nn.Module):
         x = self.norm(x.flatten(2).transpose(1, 2))
 
         return x, out_size
-
 
 class VerticalSelfAttentionLayer(nn.Module):
     def __init__(self, dim, cfg, num_heads=8, attn_drop=0., proj_drop=0., drop_path=0., dropout=0.):
@@ -110,7 +98,6 @@ class VerticalSelfAttentionLayer(nn.Module):
             num +=  np.prod(param.size())
 
         return num
-
 
 class SelfAttentionLayer(nn.Module):
     def __init__(self, dim, cfg, num_heads=8, attn_drop=0., proj_drop=0., drop_path=0., dropout=0.):
@@ -164,7 +151,6 @@ class SelfAttentionLayer(nn.Module):
 
         return num
 
-
 class CrossAttentionLayer(nn.Module):
     def __init__(self, qk_dim, v_dim, query_token_dim, tgt_token_dim, num_heads=8, attn_drop=0., proj_drop=0., drop_path=0., dropout=0.):
         super(CrossAttentionLayer, self).__init__()
@@ -208,19 +194,16 @@ class CrossAttentionLayer(nn.Module):
 
         return x
 
-
 class CostPerceiverEncoder(nn.Module):
     def __init__(self, cfg, device: str):
         super(CostPerceiverEncoder, self).__init__()
         self.cfg = cfg
         self.device = device
-        self.patch_size: int = cfg.patch_size
+        self.patch_size: int = 8
         self.cost_heads_num: int = cfg.cost_heads_num
-        self.vertical_conv: bool = cfg.vertical_conv
         self.cost_latent_token_num: int = cfg.cost_latent_token_num
-        self.cost_encoder_res: bool = cfg.cost_encoder_res
         
-        self.patch_embed = PatchEmbed(in_chans=self.cfg.cost_heads_num, patch_size=self.patch_size, embed_dim=cfg.cost_latent_input_dim, pe=cfg.pe, device=device)
+        self.patch_embed = PatchEmbed(in_chans=self.cfg.cost_heads_num, embed_dim=cfg.cost_latent_input_dim, device=device)
 
         self.depth = cfg.encoder_depth
 
@@ -231,15 +214,12 @@ class CostPerceiverEncoder(nn.Module):
         self.input_layer = CrossAttentionLayer(qk_dim, v_dim, query_token_dim, tgt_token_dim, dropout=cfg.dropout)
         self.encoder_layers = nn.ModuleList([SelfAttentionLayer(cfg.cost_latent_dim, cfg, dropout=cfg.dropout) for idx in range(self.depth)])
 
-        assert self.cfg.vertical_conv == False, "Vertical Convolution is not supported for now."
         self.vertical_encoder_layers = nn.ModuleList([VerticalSelfAttentionLayer(cfg.cost_latent_dim, cfg, dropout=cfg.dropout) for idx in range(self.depth)])
         
         self.cost_scale_aug = None
         if ('cost_scale_aug' in cfg.keys()):
             self.cost_scale_aug = cfg.cost_scale_aug
             print("[Using cost_scale_aug: {}]".format(self.cost_scale_aug))
-
-
 
     def forward(self, cost_volume: torch.Tensor, context=None) -> tuple[torch.Tensor, torch.Tensor, tuple[int, int]]:
         B, heads, H1, W1, H2, W2 = cost_volume.shape
@@ -261,27 +241,12 @@ class CostPerceiverEncoder(nn.Module):
 
         for layer, vert_layer in zip(self.encoder_layers, self.vertical_encoder_layers):
             x = layer(x)
-            # NOTE: for using JIT to speedup inference, I removed this if (vertical_conv) is always False for current configuration.
-            # if self.vertical_conv:
-            #     # B, H1*W1, K, D -> B, K, D, H1*W1 -> B*K, D, H1, W1
-            #     x = x.view(B, H1*W1, self.cost_latent_token_num, -1).permute(0, 3, 1, 2).reshape(B*self.cost_latent_token_num, -1, H1, W1)
-            #     x = vert_layer(x, (H1, W1))
-            #     # B*K, D, H1, W1 -> B, K, D, H1*W1 -> B, H1*W1, K, D
-            #     x = x.view(B, self.cost_latent_token_num, -1, H1*W1).permute(0, 2, 3, 1).reshape(B*H1*W1, self.cost_latent_token_num, -1)
-            # else:
-            #     x = x.view(B, H1*W1, self.cost_latent_token_num, -1).permute(0, 2, 1, 3).reshape(B*self.cost_latent_token_num, H1*W1, -1)
-            #     x = vert_layer(x, (H1, W1), context)
-            #     x = x.view(B, self.cost_latent_token_num, H1*W1, -1).permute(0, 2, 1, 3).reshape(B*H1*W1, self.cost_latent_token_num, -1)
-            if self.vertical_conv: raise NotImplementedError("Disabled for JIT acceleration")
-            
             x = x.view(B, H1*W1, self.cost_latent_token_num, -1).permute(0, 2, 1, 3).reshape(B*self.cost_latent_token_num, H1*W1, -1)
             x = vert_layer(x, (H1, W1), context)
             x = x.view(B, self.cost_latent_token_num, H1*W1, -1).permute(0, 2, 1, 3).reshape(B*H1*W1, self.cost_latent_token_num, -1)
 
-        if self.cost_encoder_res is True:
-            x = x + short_cut
+        x = x + short_cut
         return x, cost_maps, (size[0], size[1])
-
 
 class MemoryEncoder(nn.Module):
     def __init__(self, cfg, device: str, use_jit_inference: bool):
@@ -321,12 +286,6 @@ class MemoryEncoder(nn.Module):
         module.freeze_handle.remove()
 
     def forward(self, img1, img2, data, context=None):
-        # The original implementation
-        # feat_s = self.feat_encoder(img1)
-        # feat_t = self.feat_encoder(img2)
-        # feat_s = self.channel_convertor(feat_s)
-        # feat_t = self.channel_convertor(feat_t)
-
         imgs = torch.cat([img1, img2], dim=0)
         feats = self.feat_encoder(imgs)
         feats = self.channel_convertor(feats)
@@ -334,19 +293,6 @@ class MemoryEncoder(nn.Module):
 
         feat_s = feats[:B]
         feat_t = feats[B:]
-
-        B, C, H, W = feat_s.shape
-        size = (H, W)
-
-        if self.cfg.feat_cross_attn:
-            feat_s = feat_s.flatten(2).transpose(1, 2)
-            feat_t = feat_t.flatten(2).transpose(1, 2)
-
-            for layer in self.layers:
-                feat_s, feat_t = layer(feat_s, feat_t, size)
-
-            feat_s = feat_s.reshape(B, *size, -1).permute(0, 3, 1, 2).contiguous()
-            feat_t = feat_t.reshape(B, *size, -1).permute(0, 3, 1, 2).contiguous()
 
         cost_volume = self.corr(feat_s, feat_t)
         x, cost_maps, h3w3 = self.cost_perceiver_encoder(cost_volume, context)

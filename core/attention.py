@@ -46,7 +46,6 @@ class BroadMultiHeadAttention(nn.Module):
 
         return out
 
-
 class MultiHeadAttention(nn.Module):
     def __init__(self, dim, heads):
         super(MultiHeadAttention, self).__init__()
@@ -86,7 +85,6 @@ class MultiHeadAttention(nn.Module):
 
         return out
 
-
 def LinearPositionEmbeddingSine(x: torch.Tensor, dim: int = 128, NORMALIZE_FACOR: float =1/200):
     # 200 should be enough for a 8x downsampled image
     # assume x to be [_, _, 2]
@@ -106,4 +104,3 @@ def LinearPositionEmbeddingSine(x: torch.Tensor, dim: int = 128, NORMALIZE_FACOR
     result[..., width * 2 : width * 3] = result[..., width * 2 : width * 3].sin_()
     result[..., width * 3 : width * 4] = result[..., width * 3 : width * 4].cos_()
     return result
-

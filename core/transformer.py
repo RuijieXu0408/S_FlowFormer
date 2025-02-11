@@ -36,10 +36,7 @@ class FlowFormer(nn.Module):
 
         data = {}
 
-        if self.cfg.context_concat:
-            context = self.context_encoder(torch.cat([image1, image2], dim=1))
-        else:
-            context = self.context_encoder(image1)
+        context = self.context_encoder(image1)
 
         cost_memory = self.memory_encoder(image1, image2, data, context)
 
@@ -68,4 +65,3 @@ class FlowFormer(nn.Module):
             else:
                 cvt_ckpt[k] = ckpt[k]
         self.load_state_dict(cvt_ckpt)
-

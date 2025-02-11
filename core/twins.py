@@ -29,7 +29,6 @@ def _cfg(url='', **kwargs):
         **kwargs
     }
 
-
 default_cfgs = {
     'twins_pcpvt_small': _cfg(
         url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-vt3p-weights/twins_pcpvt_small-e70e7e7a.pth',

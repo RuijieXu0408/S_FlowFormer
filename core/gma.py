@@ -36,7 +36,6 @@ class RelPosEmb(nn.Module):
 
         return height_score + width_score
 
-
 class Attention(nn.Module):
     def __init__(
         self,
@@ -83,7 +82,6 @@ class Attention(nn.Module):
         attn = sim.softmax(dim=-1)
 
         return attn
-
 
 class Aggregate(nn.Module):
     def __init__(

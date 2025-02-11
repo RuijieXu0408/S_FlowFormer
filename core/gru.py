@@ -45,11 +45,8 @@ class SepConvGRU(nn.Module):
 class BasicMotionEncoder(nn.Module):
     def __init__(self, args):
         super(BasicMotionEncoder, self).__init__()
-        if args.only_global:
-            print("[Decoding with only global cost]")
-            cor_planes = args.query_latent_dim
-        else:
-            cor_planes = 81+args.query_latent_dim
+        cor_planes = 81 + args.query_latent_dim
+        
         self.convc1 = nn.Conv2d(cor_planes, 256, 1, padding=0)
         self.convc2 = nn.Conv2d(256, 192, 3, padding=1)
         self.convf1 = nn.Conv2d(2, 128, 7, padding=3)
