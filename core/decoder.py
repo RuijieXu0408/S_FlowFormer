@@ -1,15 +1,13 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-# from einops import rearrange
-
-from ...utils.utils import coords_grid, bilinear_sampler
-from .attention import MultiHeadAttention, LinearPositionEmbeddingSine, ExpPositionEmbeddingSine
-
 from timm.layers import DropPath
 
-from .gru import BasicUpdateBlock, GMAUpdateBlock
+from .utils import coords_grid, bilinear_sampler
+from .attention import MultiHeadAttention, LinearPositionEmbeddingSine
+
+
+from .gru import GMAUpdateBlock
 from .gma import Attention
 
 def initialize_flow(img):
@@ -73,12 +71,7 @@ class CrossAttentionLayer(nn.Module):
         # [B, 2, H1, W1] -> [BH1W1, 1, 2]
         query_coord = query_coord.contiguous()
         query_coord = query_coord.view(B, 2, -1).permute(0, 2, 1)[:,:,None,:].contiguous().view(B*H1*W1, 1, 2)
-        if self.pe == 'linear':
-            query_coord_enc = LinearPositionEmbeddingSine(query_coord, dim=self.dim)
-        elif self.pe == 'exp':
-            query_coord_enc = ExpPositionEmbeddingSine(query_coord, dim=self.dim)
-        else:
-            raise Exception(f"Unrecognized position embedding {self.pe}")
+        query_coord_enc = LinearPositionEmbeddingSine(query_coord, dim=self.dim)
 
         short_cut = query
         query = self.norm1(query)
@@ -174,12 +167,8 @@ class MemoryDecoder(nn.Module):
         self.depth = cfg.decoder_depth
         self.decoder_layer = MemoryDecoderLayer(dim, cfg)
         
-        assert self.cfg.gma
-        # if self.cfg.gma:
         self.update_block = GMAUpdateBlock(self.cfg, hidden_dim=128)
         self.att = Attention(args=self.cfg, dim=128, heads=1, max_pos_size=160, dim_head=128)
-        # else:
-            # self.update_block = BasicUpdateBlock(self.cfg, hidden_dim=128)
             
         assert not self.cfg.only_global # to reduce control flow in forward()
         

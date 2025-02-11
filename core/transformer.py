@@ -2,11 +2,10 @@ import torch
 import torch.nn as nn
 from collections import OrderedDict
 
-from ..encoders import twins_svt_large
+from .twins_svt import TwinsSVTLarge
 from .encoder import MemoryEncoder
 from .decoder import MemoryDecoder
-from .cnn import BasicEncoder
-from ....core.utils.utils import InputPadder
+from .utils import InputPadder
 
 
 class FlowFormer(nn.Module):
@@ -20,10 +19,7 @@ class FlowFormer(nn.Module):
         if use_inference_jit:
             self.freeze_handle  = self.memory_decoder.register_load_state_dict_post_hook(self.__freeze_decoder)
 
-        if cfg.cnet == 'twins':
-            self.context_encoder = twins_svt_large(pretrained=self.cfg.pretrain)
-        elif cfg.cnet == 'basicencoder':
-            self.context_encoder = BasicEncoder(output_dim=256, norm_fn='instance')
+        self.context_encoder = TwinsSVTLarge(pretrained=self.cfg.pretrain)
 
     @staticmethod
     def __freeze_decoder(module, _):

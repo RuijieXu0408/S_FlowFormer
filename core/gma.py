@@ -1,6 +1,5 @@
 import torch
 from torch import nn, einsum
-# from einops import rearrange
 
 
 class RelPosEmb(nn.Module):

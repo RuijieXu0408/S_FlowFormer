@@ -1,21 +1,18 @@
 import torch
+import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
+
 from torch import einsum
-import numpy as np
+from timm.layers import DropPath
 
 from einops import rearrange
 
-from ...utils.utils import coords_grid
-from .attention import BroadMultiHeadAttention, MultiHeadAttention, LinearPositionEmbeddingSine, ExpPositionEmbeddingSine
-from ..encoders import twins_svt_large
-from typing import Tuple
-from .twins import Size_
-from .cnn import BasicEncoder
-from .mlpmixer import MLPMixerLayer
-from .convnext import ConvNextLayer
+from .twins import Block
+from .utils import coords_grid
+from .twins_svt import TwinsSVTLarge
+from .attention import BroadMultiHeadAttention, MultiHeadAttention, LinearPositionEmbeddingSine
 
-from timm.layers import DropPath
 
 class PatchEmbed(nn.Module):
     def __init__(self, patch_size=16, in_chans=1, embed_dim=64, pe='linear', device='cuda'):
@@ -49,7 +46,7 @@ class PatchEmbed(nn.Module):
         )
         self.norm = nn.LayerNorm(embed_dim*2)
 
-    def forward(self, x) -> Tuple[torch.Tensor, list[int]]:
+    def forward(self, x) -> tuple[torch.Tensor, list[int]]:
         B, C, H, W = x.shape    # C == 1
 
         pad_l = pad_t = 0
@@ -64,12 +61,7 @@ class PatchEmbed(nn.Module):
             B, out_size[0], out_size[1], torch.device(self.device), x.dtype
         ) * self.patch_size + (self.patch_size / 2) # in feature coordinate space
         patch_coord = patch_coord.view(B, 2, -1).permute(0, 2, 1)
-        if self.pe == 'linear':
-            patch_coord_enc = LinearPositionEmbeddingSine(patch_coord, dim=self.dim)
-        elif self.pe == 'exp':
-            patch_coord_enc = ExpPositionEmbeddingSine(patch_coord, dim=self.dim)
-        else:
-            raise ValueError(f"Unsupported position encoding method {self.pe}")
+        patch_coord_enc = LinearPositionEmbeddingSine(patch_coord, dim=self.dim)
         
         patch_coord_enc = patch_coord_enc.permute(0, 2, 1).view(B, -1, out_size[0], out_size[1])
 
@@ -79,32 +71,6 @@ class PatchEmbed(nn.Module):
 
         return x, out_size
 
-from .twins import Block
-
-class GroupVerticalSelfAttentionLayer(nn.Module):
-    def __init__(self, dim, cfg, num_heads=8, attn_drop=0., proj_drop=0., drop_path=0., dropout=0.):
-        super(GroupVerticalSelfAttentionLayer, self).__init__()
-        self.cfg = cfg
-        self.dim = dim
-        self.num_heads = num_heads
-        head_dim = dim // num_heads
-        self.scale = head_dim ** -0.5
-
-        embed_dim = dim
-        mlp_ratio = 4
-        ws = 7
-        sr_ratio = 4
-        dpr = 0.
-        drop_rate = dropout
-        attn_drop_rate=0.
-
-        self.block = Block(dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, drop=drop_rate,
-                attn_drop=attn_drop_rate, drop_path=dpr, sr_ratio=sr_ratio, ws=ws, with_rpe=True, vert_c_dim=cfg.vert_c_dim, groupattention=True, cfg=self.cfg)
-
-    def forward(self, x, size, context=None):
-        x = self.block(x, size, context)
-
-        return x
 
 class VerticalSelfAttentionLayer(nn.Module):
     def __init__(self, dim, cfg, num_heads=8, attn_drop=0., proj_drop=0., drop_path=0., dropout=0.):
@@ -123,10 +89,14 @@ class VerticalSelfAttentionLayer(nn.Module):
         drop_rate = dropout
         attn_drop_rate=0.
 
-        self.local_block = Block(dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, drop=drop_rate,
-                attn_drop=attn_drop_rate, drop_path=dpr, sr_ratio=sr_ratio, ws=ws, with_rpe=True, vert_c_dim=cfg.vert_c_dim)
-        self.global_block = Block(dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, drop=drop_rate,
-                attn_drop=attn_drop_rate, drop_path=dpr, sr_ratio=sr_ratio, ws=1, with_rpe=True, vert_c_dim=cfg.vert_c_dim)
+        self.local_block = Block(
+            dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, drop=drop_rate,
+            attn_drop=attn_drop_rate, drop_path=dpr, sr_ratio=sr_ratio, ws=ws, vert_c_dim=cfg.vert_c_dim
+        )
+        self.global_block = Block(
+            dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, drop=drop_rate,
+            attn_drop=attn_drop_rate, drop_path=dpr, sr_ratio=sr_ratio, ws=1, vert_c_dim=cfg.vert_c_dim
+        )
 
     def forward(self, x: torch.Tensor, size: tuple[int, int], context=None):
         x = self.local_block(x, size, context)
@@ -140,6 +110,7 @@ class VerticalSelfAttentionLayer(nn.Module):
             num +=  np.prod(param.size())
 
         return num
+
 
 class SelfAttentionLayer(nn.Module):
     def __init__(self, dim, cfg, num_heads=8, attn_drop=0., proj_drop=0., drop_path=0., dropout=0.):
@@ -193,6 +164,7 @@ class SelfAttentionLayer(nn.Module):
 
         return num
 
+
 class CrossAttentionLayer(nn.Module):
     def __init__(self, qk_dim, v_dim, query_token_dim, tgt_token_dim, num_heads=8, attn_drop=0., proj_drop=0., drop_path=0., dropout=0.):
         super(CrossAttentionLayer, self).__init__()
@@ -236,6 +208,7 @@ class CrossAttentionLayer(nn.Module):
 
         return x
 
+
 class CostPerceiverEncoder(nn.Module):
     def __init__(self, cfg, device: str):
         super(CostPerceiverEncoder, self).__init__()
@@ -256,15 +229,8 @@ class CostPerceiverEncoder(nn.Module):
         query_token_dim, tgt_token_dim = cfg.cost_latent_dim, cfg.cost_latent_input_dim*2
         qk_dim, v_dim = query_token_dim, query_token_dim
         self.input_layer = CrossAttentionLayer(qk_dim, v_dim, query_token_dim, tgt_token_dim, dropout=cfg.dropout)
+        self.encoder_layers = nn.ModuleList([SelfAttentionLayer(cfg.cost_latent_dim, cfg, dropout=cfg.dropout) for idx in range(self.depth)])
 
-        if cfg.use_mlp:
-            self.encoder_layers = nn.ModuleList([MLPMixerLayer(cfg.cost_latent_dim, cfg, dropout=cfg.dropout) for idx in range(self.depth)])
-        else:
-            self.encoder_layers = nn.ModuleList([SelfAttentionLayer(cfg.cost_latent_dim, cfg, dropout=cfg.dropout) for idx in range(self.depth)])
-
-        # if self.cfg.vertical_conv:
-        #     self.vertical_encoder_layers = nn.ModuleList([ConvNextLayer(cfg.cost_latent_dim) for idx in range(self.depth)])
-        # else:
         assert self.cfg.vertical_conv == False, "Vertical Convolution is not supported for now."
         self.vertical_encoder_layers = nn.ModuleList([VerticalSelfAttentionLayer(cfg.cost_latent_dim, cfg, dropout=cfg.dropout) for idx in range(self.depth)])
         
@@ -316,6 +282,7 @@ class CostPerceiverEncoder(nn.Module):
             x = x + short_cut
         return x, cost_maps, (size[0], size[1])
 
+
 class MemoryEncoder(nn.Module):
     def __init__(self, cfg, device: str, use_jit_inference: bool):
         super(MemoryEncoder, self).__init__()
@@ -323,12 +290,7 @@ class MemoryEncoder(nn.Module):
         self.device = device
         self.use_jit_inference = use_jit_inference
 
-        if cfg.fnet == 'twins':
-            self.feat_encoder = twins_svt_large(pretrained=self.cfg.pretrain)
-        elif cfg.fnet == 'basicencoder':
-            self.feat_encoder = BasicEncoder(output_dim=256, norm_fn='instance')
-        else:
-            exit()
+        self.feat_encoder = TwinsSVTLarge(pretrained=self.cfg.pretrain)
         self.channel_convertor = nn.Conv2d(cfg.encoder_latent_dim, cfg.encoder_latent_dim, 1, padding=0, bias=False)
         if use_jit_inference:
             self.cost_perceiver_encoder = torch.jit.script(CostPerceiverEncoder(cfg, device)) #type: ignore
