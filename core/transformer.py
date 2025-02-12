@@ -9,12 +9,11 @@ from .utils import InputPadder
 
 
 class FlowFormer(nn.Module):
-    def __init__(self, cfg, device: str, use_inference_jit=False):
+    def __init__(self, cfg, use_inference_jit=False):
         super(FlowFormer, self).__init__()
-        self.device = device
         self.cfg = cfg
 
-        self.memory_encoder = MemoryEncoder(cfg, device, use_inference_jit)
+        self.memory_encoder = MemoryEncoder(cfg)
         self.memory_decoder = MemoryDecoder(cfg)
         if use_inference_jit:
             self.freeze_handle  = self.memory_decoder.register_load_state_dict_post_hook(self.__freeze_decoder)
@@ -25,7 +24,7 @@ class FlowFormer(nn.Module):
     def __freeze_decoder(module, _):
         if not module.use_jit_inference: return
         module.memory_decoder = torch.jit.optimize_for_inference(
-            torch.jit.script(module.memory_decoder)
+            torch.jit.script(module.memory_decoder) # type: ignore
         )
         module.freeze_handle.remove()   # Should not be triggered twice.
 
@@ -47,7 +46,6 @@ class FlowFormer(nn.Module):
     @torch.no_grad()
     @torch.inference_mode()
     def inference(self, image1, image2):
-        image1, image2 = image1.to(self.device), image2.to(self.device)
         padder = InputPadder(image1.shape)
         image1, image2 = padder.pad(image1, image2)
 

@@ -1,11 +1,11 @@
-import timm
 import torch.nn as nn
+from .Twins.svt_large import twins_svt_large
 
 
 class TwinsSVTLarge(nn.Module):
     def __init__(self, pretrained=True):
         super().__init__()
-        self.svt = timm.create_model('twins_svt_large', pretrained=pretrained)
+        self.svt = twins_svt_large(pretrained=pretrained)
 
         del self.svt.head
         del self.svt.patch_embeds[2]

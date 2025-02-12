@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from timm.layers import DropPath
 
 from .utils import coords_grid, bilinear_sampler
 from .attention import MultiHeadAttention, LinearPositionEmbeddingSine
@@ -19,16 +18,16 @@ def initialize_flow(img):
     # optical flow computed as difference: flow = mean1 - mean0
     return mean, mean_init
 
+
 class CrossAttentionLayer(nn.Module):
     def __init__(self, qk_dim: int, v_dim: int, query_token_dim: int,
                  tgt_token_dim: int, num_heads: int =8,
-                 proj_drop: float =0., drop_path: float=0., dropout: float=0., pe: str='linear'):
+                 proj_drop: float =0., dropout: float=0.):
         super(CrossAttentionLayer, self).__init__()
 
         head_dim = qk_dim // num_heads
         self.scale = head_dim ** -0.5
         self.query_token_dim = query_token_dim
-        self.pe = pe
 
         self.norm1 = nn.LayerNorm(query_token_dim)
         self.norm2 = nn.LayerNorm(query_token_dim)
@@ -39,7 +38,7 @@ class CrossAttentionLayer(nn.Module):
 
         self.proj = nn.Linear(v_dim * 2, query_token_dim)
         self.proj_drop = nn.Dropout(proj_drop)
-        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.drop_path = nn.Identity()
 
         self.ffn = nn.Sequential(
             nn.Linear(query_token_dim, query_token_dim),
@@ -83,6 +82,7 @@ class CrossAttentionLayer(nn.Module):
         x = x + self.drop_path(self.ffn(self.norm2(x)))
         return x, key, value
 
+
 class MemoryDecoderLayer(nn.Module):
     def __init__(self, cfg):
         super(MemoryDecoderLayer, self).__init__()
@@ -108,6 +108,7 @@ class MemoryDecoderLayer(nn.Module):
         # C = self.cfg.query_latent_dim
         x_global = x_global.view(B, H1, W1, query_latent_dim).permute(0, 3, 1, 2)
         return x_global, k, v
+
 
 class ReverseCostExtractor(nn.Module):
     def __init__(self, cfg):
@@ -141,6 +142,7 @@ class ReverseCostExtractor(nn.Module):
         corr = bilinear_sampler(corr, coords)
         corr = corr.view(B, H1, W1, -1).permute(0, 3, 1, 2)
         return corr
+
 
 class MemoryDecoder(nn.Module):
     def __init__(self, cfg):

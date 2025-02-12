@@ -13,42 +13,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
-from timm.layers import Mlp, DropPath
 from .attention import LinearPositionEmbeddingSine
 from .utils import coords_grid
+from .Twins.svt_large import Mlp
 
 
-def _cfg(url='', **kwargs):
-    return {
-        'url': url,
-        'num_classes': 1000, 'input_size': (3, 224, 224), 'pool_size': None,
-        'crop_pct': .9, 'interpolation': 'bicubic', 'fixed_input_size': True,
-        'mean': IMAGENET_DEFAULT_MEAN, 'std': IMAGENET_DEFAULT_STD,
-        'first_conv': 'patch_embeds.0.proj', 'classifier': 'head',
-        **kwargs
-    }
-
-default_cfgs = {
-    'twins_pcpvt_small': _cfg(
-        url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-vt3p-weights/twins_pcpvt_small-e70e7e7a.pth',
-        ),
-    'twins_pcpvt_base': _cfg(
-        url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-vt3p-weights/twins_pcpvt_base-e5ecb09b.pth',
-        ),
-    'twins_pcpvt_large': _cfg(
-        url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-vt3p-weights/twins_pcpvt_large-d273f802.pth',
-        ),
-    'twins_svt_small': _cfg(
-        url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-vt3p-weights/twins_svt_small-42e5f78c.pth',
-        ),
-    'twins_svt_base': _cfg(
-        url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-vt3p-weights/twins_svt_base-c2265010.pth',
-        ),
-    'twins_svt_large': _cfg(
-        url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-vt3p-weights/twins_svt_large-90f6aaa9.pth',
-        ),
-}
 
 class LocallyGroupedAttnRPEContext(nn.Module):
     """ LSA: self attention within a group
@@ -120,8 +89,11 @@ class LocallyGroupedAttnRPEContext(nn.Module):
         attn = self.attn_drop(attn)
         attn = (attn @ v).transpose(2, 3).reshape(B, _h, _w, self.ws, self.ws, C)
         x = attn.transpose(2, 3).reshape(B, _h * self.ws, _w * self.ws, C)
-        if pad_r > 0 or pad_b > 0:
-            x = x[:, :H, :W, :].contiguous()
+        
+        # if pad_r > 0 or pad_b > 0:
+        x = x[:, :H, :W, :].contiguous()
+        # endif
+        
         x = x.reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
@@ -149,13 +121,9 @@ class GlobalSubSampleAttnRPEContext(nn.Module):
         self.proj_drop = nn.Dropout(proj_drop)
 
         self.sr_ratio = sr_ratio
-        if sr_ratio > 1:
-            self.sr_key = nn.Conv2d(dim+vert_c_dim, dim, kernel_size=sr_ratio, stride=sr_ratio)
-            self.sr_value = nn.Conv2d(dim, dim, kernel_size=sr_ratio, stride=sr_ratio)
-            self.norm = nn.LayerNorm(dim)
-        else:
-            self.sr = None
-            self.norm = None
+        self.sr_key = nn.Conv2d(dim+vert_c_dim, dim, kernel_size=sr_ratio, stride=sr_ratio)
+        self.sr_value = nn.Conv2d(dim, dim, kernel_size=sr_ratio, stride=sr_ratio)
+        self.norm = nn.LayerNorm(dim)
 
     def forward(self, x, size: tuple[int, int], context: torch.Tensor):
         B, N, C = x.shape
@@ -186,16 +154,16 @@ class GlobalSubSampleAttnRPEContext(nn.Module):
         # x:            B, Hp*Wp, C
         q = self.q(x_qk + coords_enc).reshape(B, padded_N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
 
-        if self.sr_key is not None:
-            x = x.permute(0, 2, 1).reshape(B, C, *padded_size)
-            x_qk = x_qk.permute(0, 2, 1).reshape(B, C_qk, *padded_size)
-            x = self.sr_value(x).reshape(B, C, -1).permute(0, 2, 1)
-            x_qk = self.sr_key(x_qk).reshape(B, C, -1).permute(0, 2, 1)
-            x = self.norm(x)
-            x_qk = self.norm(x_qk)
+        x = x.permute(0, 2, 1).reshape(B, C, *padded_size)
+        x_qk = x_qk.permute(0, 2, 1).reshape(B, C_qk, *padded_size)
+        x = self.sr_value(x).reshape(B, C, -1).permute(0, 2, 1)
+        x_qk = self.sr_key(x_qk).reshape(B, C, -1).permute(0, 2, 1)
+        x = self.norm(x)
+        x_qk = self.norm(x_qk)
 
         coords = coords_grid(B, padded_size[0] // self.sr_ratio, padded_size[1] // self.sr_ratio, x.device, x.dtype)
         coords = coords.view(B, 2, -1).permute(0, 2, 1) * self.sr_ratio
+        
         # align the coordinate of local and global
         coords_enc = LinearPositionEmbeddingSine(coords, dim=C)
         k = self.k(x_qk + coords_enc).reshape(B, (padded_size[0] // self.sr_ratio)*(padded_size[1] // self.sr_ratio), self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
@@ -206,8 +174,9 @@ class GlobalSubSampleAttnRPEContext(nn.Module):
         attn = self.attn_drop(attn)
 
         x = (attn @ v).transpose(1, 2).reshape(B, Hp, Wp, C)
-        if pad_r > 0 or pad_b > 0:
-            x = x[:, :H, :W, :].contiguous()
+        # if pad_r > 0 or pad_b > 0:
+        x = x[:, :H, :W, :].contiguous()
+        # endif
 
         x = x.reshape(B, N, C)
         x = self.proj(x)
@@ -222,7 +191,6 @@ class Block(nn.Module):
         mlp_ratio: float=4.,
         drop: float=0.,
         attn_drop: float=0.,
-        drop_path: float=0.,
         sr_ratio=1,
         ws: int=1,
         vert_c_dim=0,
@@ -235,10 +203,10 @@ class Block(nn.Module):
         else:
             self.attn = LocallyGroupedAttnRPEContext(dim, num_heads, attn_drop, drop, ws, vert_c_dim)
         
-        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.drop_path = nn.Identity()
         self.norm2 = nn.LayerNorm(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=nn.GELU, drop=drop)
+        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=nn.GELU, drop=(drop, drop))
 
     def forward(self, x: torch.Tensor, size: tuple[int, int], context=None):
         x = x + self.drop_path(self.attn(self.norm1(x), size, context))

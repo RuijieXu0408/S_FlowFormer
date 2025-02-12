@@ -4,8 +4,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from torch import einsum
-from timm.layers import DropPath
-
 from einops import rearrange
 
 from .twins import Block
@@ -15,9 +13,8 @@ from .attention import BroadMultiHeadAttention, MultiHeadAttention, LinearPositi
 
 
 class PatchEmbed(nn.Module):
-    def __init__(self, in_chans=1, embed_dim=64, device='cuda'):
+    def __init__(self, in_chans=1, embed_dim=64):
         super().__init__()
-        self.device     = device
         self.patch_size = 8
         self.dim        = embed_dim
         self.proj       = nn.Sequential(
@@ -47,7 +44,7 @@ class PatchEmbed(nn.Module):
         out_size = x.shape[2:] 
 
         patch_coord = coords_grid(
-            B, out_size[0], out_size[1], torch.device(self.device), x.dtype
+            B, out_size[0], out_size[1], x.device, x.dtype
         ) * self.patch_size + (self.patch_size / 2) # in feature coordinate space
         patch_coord = patch_coord.view(B, 2, -1).permute(0, 2, 1)
         patch_coord_enc = LinearPositionEmbeddingSine(patch_coord, dim=self.dim)
@@ -60,8 +57,9 @@ class PatchEmbed(nn.Module):
 
         return x, out_size
 
+
 class VerticalSelfAttentionLayer(nn.Module):
-    def __init__(self, dim, cfg, num_heads=8, attn_drop=0., proj_drop=0., drop_path=0., dropout=0.):
+    def __init__(self, dim, cfg, num_heads=8, dropout=0.):
         super(VerticalSelfAttentionLayer, self).__init__()
         self.cfg = cfg
         self.dim = dim
@@ -73,17 +71,16 @@ class VerticalSelfAttentionLayer(nn.Module):
         mlp_ratio = 4
         ws = 7
         sr_ratio = 4
-        dpr = 0.
         drop_rate = dropout
         attn_drop_rate=0.
 
         self.local_block = Block(
             dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, drop=drop_rate,
-            attn_drop=attn_drop_rate, drop_path=dpr, sr_ratio=sr_ratio, ws=ws, vert_c_dim=cfg.vert_c_dim
+            attn_drop=attn_drop_rate, sr_ratio=sr_ratio, ws=ws, vert_c_dim=cfg.vert_c_dim
         )
         self.global_block = Block(
             dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, drop=drop_rate,
-            attn_drop=attn_drop_rate, drop_path=dpr, sr_ratio=sr_ratio, ws=1, vert_c_dim=cfg.vert_c_dim
+            attn_drop=attn_drop_rate, sr_ratio=sr_ratio, ws=1, vert_c_dim=cfg.vert_c_dim
         )
 
     def forward(self, x: torch.Tensor, size: tuple[int, int], context=None):
@@ -99,8 +96,9 @@ class VerticalSelfAttentionLayer(nn.Module):
 
         return num
 
+
 class SelfAttentionLayer(nn.Module):
-    def __init__(self, dim, cfg, num_heads=8, attn_drop=0., proj_drop=0., drop_path=0., dropout=0.):
+    def __init__(self, dim, num_heads=8, proj_drop=0., dropout=0.):
         super(SelfAttentionLayer, self).__init__()
         assert dim % num_heads == 0, f"dim {dim} should be divided by num_heads {num_heads}."
 
@@ -116,7 +114,7 @@ class SelfAttentionLayer(nn.Module):
 
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
-        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.drop_path = nn.Identity()
 
         self.ffn = nn.Sequential(
             nn.Linear(dim, dim),
@@ -151,8 +149,9 @@ class SelfAttentionLayer(nn.Module):
 
         return num
 
+
 class CrossAttentionLayer(nn.Module):
-    def __init__(self, qk_dim, v_dim, query_token_dim, tgt_token_dim, num_heads=8, attn_drop=0., proj_drop=0., drop_path=0., dropout=0.):
+    def __init__(self, qk_dim, v_dim, query_token_dim, tgt_token_dim, num_heads=8, proj_drop=0., dropout=0.):
         super(CrossAttentionLayer, self).__init__()
         assert qk_dim % num_heads == 0, f"dim {qk_dim} should be divided by num_heads {num_heads}."
         assert v_dim % num_heads == 0, f"dim {v_dim} should be divided by num_heads {num_heads}."
@@ -171,7 +170,7 @@ class CrossAttentionLayer(nn.Module):
 
         self.proj = nn.Linear(v_dim, query_token_dim)
         self.proj_drop = nn.Dropout(proj_drop)
-        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.drop_path = nn.Identity()
 
         self.ffn = nn.Sequential(
             nn.Linear(query_token_dim, query_token_dim),
@@ -194,16 +193,16 @@ class CrossAttentionLayer(nn.Module):
 
         return x
 
+
 class CostPerceiverEncoder(nn.Module):
-    def __init__(self, cfg, device: str):
+    def __init__(self, cfg):
         super(CostPerceiverEncoder, self).__init__()
         self.cfg = cfg
-        self.device = device
         self.patch_size: int = 8
         self.cost_heads_num: int = cfg.cost_heads_num
         self.cost_latent_token_num: int = cfg.cost_latent_token_num
         
-        self.patch_embed = PatchEmbed(in_chans=self.cfg.cost_heads_num, embed_dim=cfg.cost_latent_input_dim, device=device)
+        self.patch_embed = PatchEmbed(in_chans=self.cfg.cost_heads_num, embed_dim=cfg.cost_latent_input_dim)
 
         self.depth = cfg.encoder_depth
 
@@ -212,7 +211,7 @@ class CostPerceiverEncoder(nn.Module):
         query_token_dim, tgt_token_dim = cfg.cost_latent_dim, cfg.cost_latent_input_dim*2
         qk_dim, v_dim = query_token_dim, query_token_dim
         self.input_layer = CrossAttentionLayer(qk_dim, v_dim, query_token_dim, tgt_token_dim, dropout=cfg.dropout)
-        self.encoder_layers = nn.ModuleList([SelfAttentionLayer(cfg.cost_latent_dim, cfg, dropout=cfg.dropout) for idx in range(self.depth)])
+        self.encoder_layers = nn.ModuleList([SelfAttentionLayer(cfg.cost_latent_dim, dropout=cfg.dropout) for idx in range(self.depth)])
 
         self.vertical_encoder_layers = nn.ModuleList([VerticalSelfAttentionLayer(cfg.cost_latent_dim, cfg, dropout=cfg.dropout) for idx in range(self.depth)])
         
@@ -226,11 +225,11 @@ class CostPerceiverEncoder(nn.Module):
         cost_maps = cost_volume.permute(0, 2, 3, 1, 4, 5).contiguous().view(B*H1*W1, self.cost_heads_num, H2, W2)
 
         if self.cost_scale_aug is not None:
-            # scale_factor = torch.FloatTensor(B*H1*W1, self.cost_heads_num, H2, W2).uniform_(self.cost_scale_aug[0], self.cost_scale_aug[1]).to(cost_maps.device)
             scale_factor = self.cost_scale_aug[0] + torch.rand(
                 (B * H1 * W1, self.cost_heads_num, H2, W2),
                 device=cost_maps.device, dtype=cost_maps.dtype
             ) * (self.cost_scale_aug[1] - self.cost_scale_aug[0])
+            
             cost_maps = cost_maps * scale_factor
         
         x, size = self.patch_embed(cost_maps)   # B*H1*W1, size[0]*size[1], C
@@ -248,21 +247,15 @@ class CostPerceiverEncoder(nn.Module):
         x = x + short_cut
         return x, cost_maps, (size[0], size[1])
 
+
 class MemoryEncoder(nn.Module):
-    def __init__(self, cfg, device: str, use_jit_inference: bool):
+    def __init__(self, cfg):
         super(MemoryEncoder, self).__init__()
         self.cfg = cfg
-        self.device = device
-        self.use_jit_inference = use_jit_inference
 
         self.feat_encoder = TwinsSVTLarge(pretrained=self.cfg.pretrain)
         self.channel_convertor = nn.Conv2d(cfg.encoder_latent_dim, cfg.encoder_latent_dim, 1, padding=0, bias=False)
-        if use_jit_inference:
-            self.cost_perceiver_encoder = torch.jit.script(CostPerceiverEncoder(cfg, device)) #type: ignore
-        else:
-            self.cost_perceiver_encoder = CostPerceiverEncoder(cfg, device)
-        
-        self.freeze_handle = self.register_load_state_dict_post_hook(MemoryEncoder.__freeze_cost_encoder)
+        self.cost_perceiver_encoder = CostPerceiverEncoder(cfg)
 
     def corr(self, fmap1, fmap2):
 
@@ -276,14 +269,6 @@ class MemoryEncoder(nn.Module):
         corr = corr.view(batch, self.cfg.cost_heads_num, ht, wd, ht, wd)
 
         return corr
-    
-    @staticmethod
-    def __freeze_cost_encoder(module, _):
-        if not module.use_jit_inference: return
-        module.cost_perceiver_encoder = torch.jit.optimize_for_inference(module.cost_perceiver_encoder)
-        
-        # Should not be triggered twice.
-        module.freeze_handle.remove()
 
     def forward(self, img1, img2, data, context=None):
         imgs = torch.cat([img1, img2], dim=0)

@@ -1,3 +1,3 @@
-def build_flowformer(cfg, device):
+def build_flowformer(cfg):
     from .transformer import FlowFormer
-    return FlowFormer(cfg["latentcostformer"], device=device)
+    return FlowFormer(cfg["latentcostformer"])
