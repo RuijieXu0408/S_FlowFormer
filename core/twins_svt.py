@@ -7,6 +7,7 @@ class TwinsSVTLarge(nn.Module):
         super().__init__()
         self.svt = twins_svt_large(pretrained=pretrained)
 
+        del self.svt.norm
         del self.svt.head
         del self.svt.patch_embeds[2]
         del self.svt.patch_embeds[2]

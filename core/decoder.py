@@ -213,8 +213,8 @@ class MemoryDecoder(nn.Module):
 
         context = self.proj(context)
         net, inp = torch.split(context, [128, 128], dim=1)
-        net = torch.tanh_(net)
-        inp = torch.relu_(inp)
+        net = torch.tanh(net)
+        inp = torch.relu(inp)
         attention = self.att(inp)
 
         size = (net.size(0), net.size(1), net.size(2), net.size(3)) # net.shape
