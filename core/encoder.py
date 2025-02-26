@@ -3,9 +3,6 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 
-from torch import einsum
-from einops import rearrange
-
 from .twins import Block
 from .utils import coords_grid
 from .twins_svt import TwinsSVTLarge
@@ -214,23 +211,10 @@ class CostPerceiverEncoder(nn.Module):
         self.encoder_layers = nn.ModuleList([SelfAttentionLayer(cfg.cost_latent_dim, dropout=cfg.dropout) for idx in range(self.depth)])
 
         self.vertical_encoder_layers = nn.ModuleList([VerticalSelfAttentionLayer(cfg.cost_latent_dim, cfg, dropout=cfg.dropout) for idx in range(self.depth)])
-        
-        self.cost_scale_aug = None
-        if ('cost_scale_aug' in cfg.keys()):
-            self.cost_scale_aug = cfg.cost_scale_aug
-            print("[Using cost_scale_aug: {}]".format(self.cost_scale_aug))
 
     def forward(self, cost_volume: torch.Tensor, context=None) -> tuple[torch.Tensor, torch.Tensor, tuple[int, int]]:
         B, heads, H1, W1, H2, W2 = cost_volume.shape
         cost_maps = cost_volume.permute(0, 2, 3, 1, 4, 5).contiguous().view(B*H1*W1, self.cost_heads_num, H2, W2)
-
-        if self.cost_scale_aug is not None:
-            scale_factor = self.cost_scale_aug[0] + torch.rand(
-                (B * H1 * W1, self.cost_heads_num, H2, W2),
-                device=cost_maps.device, dtype=cost_maps.dtype
-            ) * (self.cost_scale_aug[1] - self.cost_scale_aug[0])
-            
-            cost_maps = cost_maps * scale_factor
         
         x, size = self.patch_embed(cost_maps)   # B*H1*W1, size[0]*size[1], C
 
@@ -258,15 +242,30 @@ class MemoryEncoder(nn.Module):
         self.cost_perceiver_encoder = CostPerceiverEncoder(cfg)
 
     def corr(self, fmap1, fmap2):
-
         batch, dim, ht, wd = fmap1.shape
-        fmap1 = rearrange(fmap1, 'b (heads d) h w -> b heads (h w) d', heads=self.cfg.cost_heads_num)
-        fmap2 = rearrange(fmap2, 'b (heads d) h w -> b heads (h w) d', heads=self.cfg.cost_heads_num)
-        corr = einsum('bhid, bhjd -> bhij', fmap1, fmap2)
-        corr = corr.permute(0, 2, 1, 3).view(batch*ht*wd, self.cfg.cost_heads_num, ht, wd)
-        #corr = self.norm(self.relu(corr))
-        corr = corr.view(batch, ht*wd, self.cfg.cost_heads_num, ht*wd).permute(0, 2, 1, 3)
-        corr = corr.view(batch, self.cfg.cost_heads_num, ht, wd, ht, wd)
+        heads = self.cfg.cost_heads_num
+        d = dim // heads  # each head's channel dim
+
+        # 1) [b, heads*d, ht, wd] -> [b, heads, (ht*wd), d] without explicit .contiguous()
+        fmap1 = fmap1.view(batch, heads, d, ht, wd)              # [b, heads, d, ht, wd]
+        fmap1 = fmap1.permute(0, 1, 3, 4, 2)                     # [b, heads, ht, wd, d]
+        fmap1 = fmap1.reshape(batch, heads, ht*wd, d)            # [b, heads, (ht*wd), d]
+
+        fmap2 = fmap2.view(batch, heads, d, ht, wd)
+        fmap2 = fmap2.permute(0, 1, 3, 4, 2)
+        fmap2 = fmap2.reshape(batch, heads, ht*wd, d)
+
+        # 2) Batched matmul over [b*heads, (ht*wd), d] x [b*heads, d, (ht*wd)]
+        fmap1_bmm = fmap1.reshape(batch*heads, ht*wd, d)
+        fmap2_bmm = fmap2.reshape(batch*heads, ht*wd, d)
+        corr_bmm  = torch.bmm(fmap1_bmm, fmap2_bmm.transpose(1, 2))  # [b*heads, (ht*wd), (ht*wd)]
+
+        # 3) Reshape to [b, heads, (ht*wd), (ht*wd)], then reorder to final shape
+        corr = corr_bmm.view(batch, heads, ht*wd, ht*wd)
+        corr = corr.permute(0, 2, 1, 3).reshape(batch*ht*wd, heads, ht, wd)
+
+        corr = corr.reshape(batch, ht*wd, heads, ht*wd).permute(0, 2, 1, 3)
+        corr = corr.reshape(batch, heads, ht, wd, ht, wd)
 
         return corr
 
