@@ -62,4 +62,4 @@ class FlowFormer(nn.Module):
                 cvt_ckpt[k[7:]] = ckpt[k]
             else:
                 cvt_ckpt[k] = ckpt[k]
-        self.load_state_dict(cvt_ckpt)
+        self.load_state_dict(cvt_ckpt, strict=False)

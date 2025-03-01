@@ -245,28 +245,21 @@ class MemoryEncoder(nn.Module):
         batch, dim, ht, wd = fmap1.shape
         heads = self.cfg.cost_heads_num
         d = dim // heads  # each head's channel dim
-
-        # 1) [b, heads*d, ht, wd] -> [b, heads, (ht*wd), d] without explicit .contiguous()
-        fmap1 = fmap1.view(batch, heads, d, ht, wd)              # [b, heads, d, ht, wd]
-        fmap1 = fmap1.permute(0, 1, 3, 4, 2)                     # [b, heads, ht, wd, d]
-        fmap1 = fmap1.reshape(batch, heads, ht*wd, d)            # [b, heads, (ht*wd), d]
-
-        fmap2 = fmap2.view(batch, heads, d, ht, wd)
-        fmap2 = fmap2.permute(0, 1, 3, 4, 2)
-        fmap2 = fmap2.reshape(batch, heads, ht*wd, d)
-
-        # 2) Batched matmul over [b*heads, (ht*wd), d] x [b*heads, d, (ht*wd)]
+        
+        # Simplified feature map reshaping - combine operations
+        fmap1 = fmap1.reshape(batch, heads, d, ht*wd).permute(0, 1, 3, 2).contiguous()  # [b, heads, (ht*wd), d]
+        fmap2 = fmap2.reshape(batch, heads, d, ht*wd).permute(0, 1, 3, 2).contiguous()  # [b, heads, (ht*wd), d]
+        
+        # Reshape for bmm (keeping the efficient batch matrix multiplication)
         fmap1_bmm = fmap1.reshape(batch*heads, ht*wd, d)
         fmap2_bmm = fmap2.reshape(batch*heads, ht*wd, d)
-        corr_bmm  = torch.bmm(fmap1_bmm, fmap2_bmm.transpose(1, 2))  # [b*heads, (ht*wd), (ht*wd)]
-
-        # 3) Reshape to [b, heads, (ht*wd), (ht*wd)], then reorder to final shape
-        corr = corr_bmm.view(batch, heads, ht*wd, ht*wd)
-        corr = corr.permute(0, 2, 1, 3).reshape(batch*ht*wd, heads, ht, wd)
-
-        corr = corr.reshape(batch, ht*wd, heads, ht*wd).permute(0, 2, 1, 3)
-        corr = corr.reshape(batch, heads, ht, wd, ht, wd)
-
+        
+        # Use bmm as in the original code
+        corr_bmm = torch.bmm(fmap1_bmm, fmap2_bmm.transpose(1, 2))  # [b*heads, (ht*wd), (ht*wd)]
+        
+        # Simplified reshaping to final 6D format - direct reshape from bmm result
+        corr = corr_bmm.view(batch, heads, ht*wd, ht*wd).reshape(batch, heads, ht, wd, ht, wd)
+        
         return corr
 
     def forward(self, img1, img2, data, context=None):
@@ -275,10 +268,10 @@ class MemoryEncoder(nn.Module):
         feats = self.channel_convertor(feats)
         B = feats.shape[0] // 2
 
-        feat_s = feats[:B]
-        feat_t = feats[B:]
+        feat_s = feats[:B].to(torch.float16)
+        feat_t = feats[B:].to(torch.float16)
 
-        cost_volume = self.corr(feat_s, feat_t)
+        cost_volume = self.corr(feat_s, feat_t).to(torch.float32)
         x, cost_maps, h3w3 = self.cost_perceiver_encoder(cost_volume, context)
         
         data['cost_maps'] = cost_maps
