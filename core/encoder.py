@@ -271,7 +271,7 @@ class MemoryEncoder(nn.Module):
         feat_s = feats[:B].to(torch.float16)
         feat_t = feats[B:].to(torch.float16)
 
-        cost_volume = self.corr(feat_s, feat_t).to(torch.float32)
+        cost_volume = self.corr(feat_s, feat_t).to(feats)
         x, cost_maps, h3w3 = self.cost_perceiver_encoder(cost_volume, context)
         
         data['cost_maps'] = cost_maps
