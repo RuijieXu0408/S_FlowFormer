@@ -85,22 +85,37 @@ class MultiHeadAttention(nn.Module):
 
         return out
 
-def LinearPositionEmbeddingSine(x: torch.Tensor, dim: int = 128, NORMALIZE_FACOR: float =1/200):
-    # 200 should be enough for a 8x downsampled image
-    # assume x to be [_, _, 2]
-    freq_bands = torch.linspace(0, dim//4-1, dim//4, device=x.device, dtype=x.dtype)
+
+def LinearPositionEmbeddingSine(
+    x: torch.Tensor,
+    dim: int = 128,
+    NORMALIZE_FACTOR: float = 1/200
+) -> torch.Tensor:
+    """
+    Same behavior as the original, but built via elementwise ops + concat
+    (no in-place slice-assign => no ScatterND).
     
-    width: int = freq_bands.size(0)
-    result = torch.empty((x.size(0), x.size(1), width * 4), device=x.device, dtype=x.dtype)
-    result[..., width * 0 : width * 1] = x[..., -2:-1] * freq_bands
-    result[..., width * 1 : width * 2] = x[..., -2:-1] * freq_bands
-    result[..., width * 2 : width * 3] = x[..., -1:]   * freq_bands
-    result[..., width * 3 : width * 4] = x[..., -1:]   * freq_bands
-    
-    result *= NORMALIZE_FACOR * torch.pi
-    
-    result[..., width * 0 : width * 1] = result[..., width * 0 : width * 1].sin_()
-    result[..., width * 1 : width * 2] = result[..., width * 1 : width * 2].cos_()
-    result[..., width * 2 : width * 3] = result[..., width * 2 : width * 3].sin_()
-    result[..., width * 3 : width * 4] = result[..., width * 3 : width * 4].cos_()
-    return result
+    Args:
+      x: Tensor of shape [B, N, 2]
+      dim: total embedding dimension (must be divisible by 4)
+      NORMALIZE_FACTOR: scaling before sin/cos
+    Returns:
+      Tensor of shape [B, N, dim]
+    """
+    width = dim // 4
+    freq_bands = torch.linspace(0, width - 1, width,
+                                device=x.device, dtype=x.dtype)
+    scale = NORMALIZE_FACTOR * torch.pi
+
+    x0 = x[..., -2:-1]    # shape [B, N, 1]
+    x1 = x[..., -1:]      # shape [B, N, 1]
+
+    arg0 = x0 * freq_bands * scale
+    arg1 = x1 * freq_bands * scale
+
+    sin0 = torch.sin(arg0)
+    cos0 = torch.cos(arg0)
+    sin1 = torch.sin(arg1)
+    cos1 = torch.cos(arg1)
+
+    return torch.cat([sin0, cos0, sin1, cos1], dim=-1)

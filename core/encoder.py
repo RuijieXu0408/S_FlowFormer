@@ -212,7 +212,7 @@ class CostPerceiverEncoder(nn.Module):
 
         self.vertical_encoder_layers = nn.ModuleList([VerticalSelfAttentionLayer(cfg.cost_latent_dim, cfg, dropout=cfg.dropout) for idx in range(self.depth)])
 
-    def forward(self, cost_volume: torch.Tensor, context=None) -> tuple[torch.Tensor, torch.Tensor, tuple[int, int]]:
+    def forward(self, cost_volume: torch.Tensor, context=None) -> tuple[torch.Tensor, torch.Tensor]:
         B, heads, H1, W1, H2, W2 = cost_volume.shape
         cost_maps = cost_volume.permute(0, 2, 3, 1, 4, 5).contiguous().view(B*H1*W1, self.cost_heads_num, H2, W2)
         
@@ -229,7 +229,7 @@ class CostPerceiverEncoder(nn.Module):
             x = x.view(B, self.cost_latent_token_num, H1*W1, -1).permute(0, 2, 1, 3).reshape(B*H1*W1, self.cost_latent_token_num, -1)
 
         x = x + short_cut
-        return x, cost_maps, (size[0], size[1])
+        return x, cost_maps
 
 
 class MemoryEncoder(nn.Module):
@@ -262,7 +262,7 @@ class MemoryEncoder(nn.Module):
         
         return corr
 
-    def forward(self, img1, img2, data, context=None):
+    def forward(self, img1, img2, context):
         imgs = torch.cat([img1, img2], dim=0)
         feats = self.feat_encoder(imgs)
         feats = self.channel_convertor(feats)
@@ -272,8 +272,6 @@ class MemoryEncoder(nn.Module):
         feat_t = feats[B:].to(torch.float16)
 
         cost_volume = self.corr(feat_s, feat_t).to(feats)
-        x, cost_maps, h3w3 = self.cost_perceiver_encoder(cost_volume, context)
-        
-        data['cost_maps'] = cost_maps
-        data['H3W3'] = h3w3
-        return x
+        x, cost_maps = self.cost_perceiver_encoder(cost_volume, context)
+
+        return x, cost_maps

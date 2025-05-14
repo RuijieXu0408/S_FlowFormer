@@ -33,13 +33,11 @@ class FlowFormer(nn.Module):
         image1 = (2 * image1) - 1.0
         image2 = (2 * image2) - 1.0
 
-        data = {}
-
         context = self.context_encoder(image1)
 
-        cost_memory = self.memory_encoder(image1, image2, data, context)
+        cost_memory, cost_maps = self.memory_encoder(image1, image2, context)
 
-        flow_predictions = self.memory_decoder(cost_memory, context, data["cost_maps"], self.cfg.query_latent_dim, flow_init=None)
+        flow_predictions = self.memory_decoder(cost_memory, context, cost_maps, self.cfg.query_latent_dim, flow_init=None)
 
         return flow_predictions
 
