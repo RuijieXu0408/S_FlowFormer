@@ -19,7 +19,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from timm.models._builder import build_model_with_cfg
+# from timm.models._builder import build_model_with_cfg
+
+def build_model_with_cfg(
+    model_cls,
+    variant=None,
+    pretrained=False,
+    feature_cfg=None,
+    **kwargs
+):
+    return model_cls(**kwargs)
 
 
 class Mlp(nn.Module):
