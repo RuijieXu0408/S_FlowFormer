@@ -12,11 +12,9 @@ from .gma import Attention
 def initialize_flow(img):
     """ Flow is represented as difference between two means flow = mean1 - mean0"""
     N, H, W = img.size(0), img.size(2), img.size(3)     # img = (N, C, H, W)
-    mean      = coords_grid(N, H, W, img.device, img.dtype)
-    mean_init = coords_grid(N, H, W, img.device, img.dtype)
-
-    # optical flow computed as difference: flow = mean1 - mean0
-    return mean, mean_init
+    mean0   = coords_grid(N, H, W, img.device, img.dtype)
+    mean1   = mean0.detach().clone()
+    return mean0, mean1
 
 
 class CrossAttentionLayer(nn.Module):
@@ -38,7 +36,6 @@ class CrossAttentionLayer(nn.Module):
 
         self.proj = nn.Linear(v_dim * 2, query_token_dim)
         self.proj_drop = nn.Dropout(proj_drop)
-        self.drop_path = nn.Identity()
 
         self.ffn = nn.Sequential(
             nn.Linear(query_token_dim, query_token_dim),
@@ -49,38 +46,34 @@ class CrossAttentionLayer(nn.Module):
         )
         self.dim = qk_dim
     
-    def forward(self, query: torch.Tensor, inp_key: torch.Tensor | None, inp_value: torch.Tensor | None,
-                memory: torch.Tensor, query_coord: torch.Tensor):
+    def forward(
+        self,
+        query: torch.Tensor,
+        inp_key: torch.Tensor | None,
+        inp_value: torch.Tensor | None,
+        memory: torch.Tensor,
+        query_coord: torch.Tensor
+    ):
         """
-            query_coord [B, 2, H1, W1]
+        query_coord [B, 2, H1, W1]
         """
-        B, H1, W1 = query_coord.size(0), query_coord.size(2), query_coord.size(3)
-        
-        if inp_key is None: 
-            key = self.k(memory)
-        else:
-            key = inp_key
-            
-        if inp_value is None:
-            value = self.v(memory)
-        else:
-            value = inp_value
+        B, _, H1, W1 = query_coord.shape
 
-        # [B, 2, H1, W1] -> [BH1W1, 1, 2]
-        query_coord = query_coord.contiguous()
-        query_coord = query_coord.view(B, 2, -1).permute(0, 2, 1)[:,:,None,:].contiguous().view(B*H1*W1, 1, 2)
-        query_coord_enc = LinearPositionEmbeddingSine(query_coord, dim=self.dim)
+        k: torch.Tensor = self.k(memory) if inp_key is None else inp_key
+        v: torch.Tensor = self.v(memory) if inp_value is None else inp_value
 
-        short_cut = query
-        query = self.norm1(query)
-        q = self.q(query+query_coord_enc)
+        coords_flat = query_coord.permute(0, 2, 3, 1).reshape(B * H1 * W1, 1, 2)
+        query_coord_enc = LinearPositionEmbeddingSine(coords_flat, dim=self.dim)
 
-        x = self.multi_head_attn(q, key, value)
-        x = self.proj(torch.cat([x, short_cut],dim=2))
-        x = short_cut + self.proj_drop(x)
+        q         = self.norm1(query)
+        q         = self.q(q + query_coord_enc)
 
-        x = x + self.drop_path(self.ffn(self.norm2(x)))
-        return x, key, value
+        x         = self.multi_head_attn(q, k, v)
+        x         = self.proj(torch.cat([x, query],dim=2))
+        x         = query + self.proj_drop(x)
+
+        x = x + self.ffn(self.norm2(x))
+        return x, k, v
 
 
 class MemoryDecoderLayer(nn.Module):
@@ -110,40 +103,6 @@ class MemoryDecoderLayer(nn.Module):
         return x_global, k, v
 
 
-class ReverseCostExtractor(nn.Module):
-    def __init__(self, cfg):
-        super(ReverseCostExtractor, self).__init__()
-        self.cfg = cfg
-
-    def forward(self, cost_maps, coords0, coords1):
-        """
-        cost_maps   -   B*H1*W1, cost_heads_num, H2, W2
-        coords      -   B, 2, H1, W1
-        """
-        BH1W1, heads, H2, W2 = cost_maps.shape
-        B, _, H1, W1 = coords1.shape
-
-        assert (H1 == H2) and (W1 == W2)
-        assert BH1W1 == B*H1*W1
-
-        cost_maps = cost_maps.reshape(B, H1* W1*heads, H2, W2)
-        coords = coords1.permute(0, 2, 3, 1)
-        corr = bilinear_sampler(cost_maps, coords) # [B, H1*W1*heads, H2, W2]
-        # corr = rearrange(corr, 'b (h1 w1 heads) h2 w2 -> (b h2 w2) heads h1 w1', b=B, heads=heads, h1=H1, w1=W1, h2=H2, w2=W2)
-        corr = corr.view(B, H1, W1, heads, H2, W2).permute(0, 4, 5, 3, 1, 2).reshape(B*H2*W2, heads, H1, W1)
-        
-        r = 4
-        dx = torch.linspace(-r, r, 2*r+1, device=coords0.device)
-        dy = torch.linspace(-r, r, 2*r+1, device=coords0.device)
-        delta = torch.stack(torch.meshgrid(dy, dx), dim=-1)
-        centroid = coords0.permute(0, 2, 3, 1).reshape(BH1W1, 1, 1, 2)
-        delta = delta.view(1, 2*r+1, 2*r+1, 2)
-        coords = centroid + delta
-        corr = bilinear_sampler(corr, coords)
-        corr = corr.view(B, H1, W1, -1).permute(0, 3, 1, 2)
-        return corr
-
-
 class MemoryDecoder(nn.Module):
     def __init__(self, cfg):
         super(MemoryDecoder, self).__init__()
@@ -151,7 +110,7 @@ class MemoryDecoder(nn.Module):
         self.cfg = cfg
 
         self.flow_token_encoder = nn.Sequential(
-            nn.Conv2d(81*cfg.cost_heads_num, dim, 1, 1),
+            nn.Conv2d(81 * cfg.cost_heads_num, dim, 1, 1),
             nn.GELU(),
             nn.Conv2d(dim, dim, 1, 1)
         )
@@ -160,20 +119,24 @@ class MemoryDecoder(nn.Module):
         self.decoder_layer = MemoryDecoderLayer(cfg)
         
         self.update_block = GMAUpdateBlock(self.cfg, hidden_dim=128)
-        self.att = Attention(args=self.cfg, dim=128, heads=1, max_pos_size=160, dim_head=128)
+        self.att          = Attention(args=self.cfg, dim=128, heads=1, max_pos_size=160, dim_head=128)
+        
+        r = 4
+        dx    = torch.linspace(-r, r, 2*r+1)
+        dy    = torch.linspace(-r, r, 2*r+1)
+        delta = torch.stack(torch.meshgrid(dy, dx, indexing="ij"), dim=-1)
+        delta = delta.view(1, 2*r+1, 2*r+1, 2)
+        self.register_buffer("delta", delta)
             
     def upsample_flow(self, flow, mask):
         """ Upsample flow field [H/8, W/8, 2] -> [H, W, 2] using convex combination """
-        N, _, H, W = flow.shape
-        mask = mask.view(N, 1, 9, 8, 8, H, W)
-        mask = torch.softmax(mask, dim=2)
-
-        up_flow = F.unfold(8 * flow, (3, 3), padding=1)
-        up_flow = up_flow.view(N, 2, 9, 1, 1, H, W)
-
-        up_flow = torch.sum(mask * up_flow, dim=2)
-        up_flow = up_flow.permute(0, 1, 4, 2, 5, 3)
-        return up_flow.reshape(N, 2, 8*H, 8*W)
+        N, C, H, W = flow.shape
+        
+        mask = mask.view(N, 9, 8, 8, H, W).softmax(dim=1)
+        up_flow = F.unfold(8 * flow, (3, 3), padding=1).view(N, C, 9, H, W)
+        weighted = (mask.unsqueeze(1) * up_flow.unsqueeze(-3).unsqueeze(-3)).sum(dim=2)
+        
+        return weighted.permute(0, 1, 4, 2, 5, 3).reshape(N, C, 8 * H, 8 * W)
 
     def encode_flow_token(self, cost_maps, coords):
         """
@@ -183,16 +146,10 @@ class MemoryDecoder(nn.Module):
         coords = coords.permute(0, 2, 3, 1)
         batch, h1, w1, _ = coords.shape
 
-        r = 4
-        dx = torch.linspace(-r, r, 2*r+1, device=coords.device, dtype=coords.dtype)
-        dy = torch.linspace(-r, r, 2*r+1, device=coords.device, dtype=coords.dtype)
-        delta = torch.stack(torch.meshgrid(dy, dx, indexing="ij"), dim=-1)
-
         centroid = coords.reshape(batch*h1*w1, 1, 1, 2)
-        delta = delta.view(1, 2*r+1, 2*r+1, 2)
-        coords = centroid + delta
-        corr = bilinear_sampler(cost_maps, coords)
-        corr = corr.view(batch, h1, w1, -1).permute(0, 3, 1, 2)
+        coords   = centroid + self.delta
+        corr     = bilinear_sampler(cost_maps, coords)
+        corr     = corr.view(batch, h1, w1, -1).permute(0, 3, 1, 2)
         return corr
 
     def forward(
