@@ -9,24 +9,14 @@ from .utils import InputPadder
 
 
 class FlowFormer(nn.Module):
-    def __init__(self, cfg, use_inference_jit=False):
+    def __init__(self, cfg):
         super(FlowFormer, self).__init__()
         self.cfg = cfg
 
         self.memory_encoder = MemoryEncoder(cfg)
         self.memory_decoder = MemoryDecoder(cfg)
-        if use_inference_jit:
-            self.freeze_handle  = self.memory_decoder.register_load_state_dict_post_hook(self.__freeze_decoder)
 
         self.context_encoder = TwinsSVTLarge(pretrained=self.cfg.pretrain)
-
-    @staticmethod
-    def __freeze_decoder(module, _):
-        if not module.use_jit_inference: return
-        module.memory_decoder = torch.jit.optimize_for_inference(
-            torch.jit.script(module.memory_decoder) # type: ignore
-        )
-        module.freeze_handle.remove()   # Should not be triggered twice.
 
     def forward(self, image1, image2):
         # Following https://github.com/princeton-vl/RAFT/
