@@ -78,7 +78,7 @@ def train(cfg):
 
         for i_batch, data_blob in enumerate(train_loader):
             optimizer.zero_grad()
-            image1, image2, flow, valid = [x.cuda() for x in data_blob]
+            image1, image2, flow, valid, imu_seq = [x.cuda() for x in data_blob]
 
             if cfg.add_noise:
                 stdv = np.random.uniform(0.0, 5.0)
@@ -86,7 +86,7 @@ def train(cfg):
                 image2 = (image2 + stdv * torch.randn(*image2.shape).cuda()).clamp(0.0, 255.0)
 
             output = {}
-            flow_predictions = model(image1, image2, output)
+            flow_predictions = model(image1, image2, imu_seq)
             loss, metrics = sequence_loss(flow_predictions, flow, valid, cfg)
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
